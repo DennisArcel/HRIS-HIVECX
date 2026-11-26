@@ -19,6 +19,14 @@ function Stat({ fig, title, value, sub }: { fig: string; title: string; value: s
   );
 }
 
+/** Payday rule: cutoff 1–15 is paid on the 20th of the same month; cutoff 16–end is paid on the 5th of the next month. */
+function payday(to: string) {
+  const [y, m, d] = to.split("-").map(Number);
+  const p = (n: number) => String(n).padStart(2, "0");
+  if (d <= 15) return `${y}-${p(m)}-20`;
+  return m === 12 ? `${y + 1}-01-05` : `${y}-${p(m + 1)}-05`;
+}
+
 export default async function PayslipsPage() {
   // 1. Who is signed in? Everything below is filtered by this id, so an employee only ever gets their own data.
   const sb = await supabaseServer();
@@ -56,23 +64,27 @@ export default async function PayslipsPage() {
     return computePay({ salary_semi: Number(me.salary_semi) || 0, worker_type: me.worker_type }, adj, otHours);
   };
 
-  const rows: SlipRow[] = periods.map((p) => {
-    const released = processed.has(p.from);
-    return {
-      from: p.from,
-      to: p.to,
-      label: p.label,
-      released,
-      status: released ? "Processed" : p.to >= today ? "Upcoming" : "Pending",
-      calc: released ? calcFor(p) : null, // amounts are only sent to the browser once payroll is run
-    };
-  });
+  // Show only released payslips and the periods still coming up. Past periods that payroll never ran are hidden;
+  // they appear here (as Processed) the moment HR runs them.
+  const rows: SlipRow[] = periods
+    .filter((p) => processed.has(p.from) || p.to >= today)
+    .map((p) => {
+      const released = processed.has(p.from);
+      return {
+        from: p.from,
+        to: p.to,
+        payday: payday(p.to),
+        label: p.label,
+        released,
+        status: released ? "Processed" : "Upcoming",
+        calc: released ? calcFor(p) : null, // amounts are only sent to the browser once payroll is run
+      };
+    });
 
   // Stat cards
   const released = rows.filter((r) => r.released);
   const latestSlip = released[0]?.calc ?? null;
-  const nextPeriod = [...periods].reverse().find((p) => !processed.has(p.from) && p.to >= today);
-  const nextNet = nextPeriod ? calcFor(nextPeriod).net : null;
+  const nextPayday = periods.map((p) => payday(p.to)).filter((d) => d >= today).sort()[0];
 
   return (
     <>
@@ -87,7 +99,7 @@ export default async function PayslipsPage() {
       </p>
 
       <div className="grid g4">
-        <Stat fig="NEXT PAYDAY" title={nextPeriod ? fmtDate(nextPeriod.to) : "—"} value={nextNet != null ? PHP(nextNet) : "—"} sub="estimated net · semi-monthly" />
+        <Stat fig="NEXT PAYDAY" title="Pay date" value={nextPayday ? fmtDate(nextPayday) : "—"} sub="amount is shown once HR runs payroll" />
         <Stat fig="LATEST PAYSLIP" title="Gross pay" value={latestSlip ? PHP(latestSlip.g) : "—"} sub="basic + allowances + overtime" />
         <Stat fig="LATEST PAYSLIP" title="Deductions" value={latestSlip ? PHP(latestSlip.ded) : "—"} sub="SSS · PhilHealth · Pag-IBIG · tax" />
         <Stat fig="RELEASED" title="Payslips" value={String(released.length)} sub="available to view" />

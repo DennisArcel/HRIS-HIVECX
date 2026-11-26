@@ -10,6 +10,7 @@ type Calc = ReturnType<typeof computePay>;
 export type SlipRow = {
   from: string;
   to: string;
+  payday: string;
   label: string;
   status: string;
   released: boolean;
@@ -122,7 +123,7 @@ function Slip({ me, row, x, onClose, onPrint }: { me: SlipMe; row: SlipRow; x: C
         </div>
         <div style={{ textAlign: "right" }}>
           <b>{row.label}</b>
-          <div className="mut" style={{ fontSize: 12.5 }}>Pay date: {fmtDate(row.to)}</div>
+          <div className="mut" style={{ fontSize: 12.5 }}>Pay date: {fmtDate(row.payday)}</div>
         </div>
       </div>
 
