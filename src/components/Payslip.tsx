@@ -2,19 +2,24 @@
 import { useEffect } from "react";
 import { Modal } from "./ui";
 import { fmtDate } from "@/lib/fmt";
-import { PHP, computePay, isIC, type Adj } from "@/lib/payroll-calc";
+import { MAX_CUTOFF_HOURS, PHP, computePay, docName, isIC, type Adj, type PayHours } from "@/lib/payroll-calc";
 
 export type SlipData = {
   name: string;
   code: string;
   position: string | null;
-  department: string | null;
-  salary: number;
+  department?: string | null;
+  salary: number; // pay per cutoff (legacy)
+  monthly?: number; // monthly salary (preferred; hourly rate comes from this)
   workerType: string;
   adj: Adj;
   otHours: number;
+  hours?: PayHours | null; // clocked hours for the period
 };
 
+const hrs = (n: number) => n.toFixed(2).replace(/\.?0+$/, "") || "0";
+
+/** Payslip for employees; Settlement for independent contractors. */
 export function Payslip({
   r,
   period,
@@ -26,8 +31,9 @@ export function Payslip({
   onClose: () => void;
   autoPrint?: boolean;
 }) {
-  const w = { salary_semi: r.salary, worker_type: r.workerType };
-  const x = computePay(w, r.adj, r.otHours);
+  const w = { salary_semi: r.salary, salary_monthly: r.monthly, worker_type: r.workerType };
+  const x = computePay(w, r.adj, r.otHours, r.hours);
+  const doc = docName(r.workerType);
   useEffect(() => {
     if (!autoPrint) return;
     const t = setTimeout(() => window.print(), 250);
@@ -52,10 +58,10 @@ export function Payslip({
       <div className="slipdoc print-area">
         <div className="sphd">
           <div>
-            <div className="fig">PAYSLIP</div>
+            <div className="fig">{doc.toUpperCase()}</div>
             <h3 style={{ marginTop: 6 }}>{r.name}</h3>
             <div className="mut" style={{ fontSize: 13 }}>
-              {r.code} · {r.position} · {r.department}
+              {r.code} · {r.position}
               {isIC(w) ? " · Independent contractor" : ""}
             </div>
           </div>
@@ -66,7 +72,10 @@ export function Payslip({
         </div>
         <div className="fig" style={{ marginTop: 14 }}>EARNINGS</div>
         <div className="docgrid">
-          <div className="k">Basic pay (semi-monthly)</div><div className="v">{PHP(x.half)}</div>
+          <div className="k">
+            {x.hoursPaid != null ? `Basic pay (${hrs(x.hoursPaid)} hrs × ${PHP(x.rate)}/hr)` : "Basic pay (semi-monthly)"}
+          </div>
+          <div className="v">{PHP(x.basic)}</div>
           <div className="k">Allowances (transport &amp; COLA)</div><div className="v">{PHP(x.allow)}</div>
           <div className="k">Overtime ({x.otHrs} hrs × 125%)</div><div className="v">{PHP(x.ot)}</div>
           {x.extras.filter((z) => +z.amt > 0).map((z, i) => (
@@ -77,6 +86,13 @@ export function Payslip({
           <div className="k" style={{ fontWeight: 700, color: "var(--tx)" }}>Gross pay</div>
           <div className="v" style={{ fontWeight: 700 }}>{PHP(x.g)}</div>
         </div>
+        {x.hoursPaid != null && (
+          <p className="mut" style={{ fontSize: 12, margin: "8px 0 0" }}>
+            Hourly rate = monthly salary {PHP(x.monthly)} ÷ 20 days ÷ 8 hrs, based on your clock in and clock out.
+            {x.hours ? ` ${x.hours.days} day${x.hours.days === 1 ? "" : "s"} worked${x.hours.leaveDays ? `, ${x.hours.leaveDays} on approved leave` : ""}.` : ""}
+            {x.capped ? ` Paid hours are capped at ${MAX_CUTOFF_HOURS} per cutoff.` : ""}
+          </p>
+        )}
         <div className="fig" style={{ marginTop: 16 }}>DEDUCTIONS</div>
         <div className="docgrid">
           {crow("sss", "SSS contribution (5%)")}

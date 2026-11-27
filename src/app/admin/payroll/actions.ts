@@ -2,10 +2,11 @@
 import { revalidatePath } from "next/cache";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { requireAdmin } from "@/lib/auth";
-import { contribFor, isIC, periodOf, round2, type Contrib, type Extra } from "@/lib/payroll-calc";
+import { manilaNow } from "@/lib/dates";
+import { contribFor, docName, isIC, periodOf, round2, type Contrib, type Extra } from "@/lib/payroll-calc";
 
 type R = { error?: string };
-const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+const today = () => manilaNow().date;
 const okNum = (n: unknown) => typeof n === "number" && Number.isFinite(n) && n >= 0;
 const peso = (n: number) => "₱" + n.toLocaleString("en-PH", { minimumFractionDigits: 2 });
 const done = () => {
@@ -16,7 +17,7 @@ const done = () => {
 export async function savePayslip(input: {
   employeeId: string;
   periodFrom: string;
-  salary: number;
+  salary: number; // monthly salary
   sss: Contrib;
   ph: Contrib;
   pg: Contrib;
@@ -32,19 +33,19 @@ export async function savePayslip(input: {
   const per = periodOf(periodFrom);
   const { data: run } = await db.from("payroll_runs").select("status").eq("period_from", periodFrom).maybeSingle();
   if (run?.status === "Processed") return { error: "This payslip is locked. Payroll is already processed." };
-  const { data: e } = await db.from("profiles").select("full_name, salary_semi, worker_type").eq("id", employeeId).single();
+  const { data: e } = await db.from("profiles").select("full_name, salary_monthly, worker_type").eq("id", employeeId).single();
   if (!e) return { error: "Employee not found." };
 
   await db.from("payroll_runs").upsert({ period_from: periodFrom, period_to: per.to }, { onConflict: "period_from", ignoreDuplicates: true });
 
   const newSal = round2(input.salary);
-  const oldSal = Number(e.salary_semi) || 0;
+  const oldSal = Number(e.salary_monthly) || 0;
   if (newSal !== oldSal) {
-    const { error } = await db.from("profiles").update({ salary_semi: newSal }).eq("id", employeeId);
+    const { error } = await db.from("profiles").update({ salary_monthly: newSal }).eq("id", employeeId);
     if (error) return { error: error.message };
     await db.from("audit_log").insert({
       actor: admin.id, actor_name: admin.name, action: "Salary updated",
-      detail: `${e.full_name} · ${peso(oldSal)} → ${peso(newSal)} per cutoff`,
+      detail: `${e.full_name} · ${peso(oldSal)} → ${peso(newSal)} per month`,
     });
   }
 
@@ -53,7 +54,7 @@ export async function savePayslip(input: {
     .map((x) => ({ label: (x.label || "").trim() || "Additional pay", amt: round2(x.amt), ...(x.hd ? { hd: x.hd } : {}) }));
   const fix = (c: Contrib) => ({ on: !!c.on, amt: round2(c.amt) });
   const sss = fix(input.sss), ph = fix(input.ph), pg = fix(input.pg);
-  const def = contribFor(newSal);
+  const def = contribFor(newSal / 2); // contributions are based on the monthly salary, half per cutoff
   const ic = isIC(e);
   const standard =
     (["sss", "ph", "pg"] as const).every((k) => {
@@ -66,7 +67,7 @@ export async function savePayslip(input: {
     : await db.from("pay_adjustments").upsert({ employee_id: employeeId, period_from: periodFrom, sss, ph, pg, extras }, { onConflict: "employee_id,period_from" });
   if (error) return { error: error.message };
 
-  await db.from("audit_log").insert({ actor: admin.id, actor_name: admin.name, action: "Payslip edited", detail: `${e.full_name} · ${per.label}` });
+  await db.from("audit_log").insert({ actor: admin.id, actor_name: admin.name, action: `${docName(e.worker_type)} edited`, detail: `${e.full_name} · ${per.label}` });
   done();
   return {};
 }
@@ -76,10 +77,10 @@ export async function resetPayslip(employeeId: string, periodFrom: string): Prom
   const db = supabaseAdmin();
   const { data: run } = await db.from("payroll_runs").select("status").eq("period_from", periodFrom).maybeSingle();
   if (run?.status === "Processed") return { error: "This payslip is locked. Payroll is already processed." };
-  const { data: e } = await db.from("profiles").select("full_name").eq("id", employeeId).single();
+  const { data: e } = await db.from("profiles").select("full_name, worker_type").eq("id", employeeId).single();
   const { error } = await db.from("pay_adjustments").delete().eq("employee_id", employeeId).eq("period_from", periodFrom);
   if (error) return { error: error.message };
-  await db.from("audit_log").insert({ actor: admin.id, actor_name: admin.name, action: "Payslip reset", detail: `${e?.full_name ?? employeeId} · ${periodOf(periodFrom).label}` });
+  await db.from("audit_log").insert({ actor: admin.id, actor_name: admin.name, action: `${docName(e?.worker_type ?? "")} reset`, detail: `${e?.full_name ?? employeeId} · ${periodOf(periodFrom).label}` });
   done();
   return {};
 }
@@ -99,14 +100,14 @@ export async function runPayroll(periodFrom: string): Promise<R> {
   );
   if (error) return { error: error.message };
 
-  const { data: emps } = await db.from("profiles").select("id").eq("role", "employee");
+  const { data: emps } = await db.from("profiles").select("id, worker_type").eq("role", "employee").or(`hired_on.is.null,hired_on.lte.${per.to}`);
   if (emps?.length) {
     await db.from("notifications").insert(
       emps.map((e) => ({
         employee_id: e.id,
         kind: "payslip",
-        title: again ? `Corrected payslip for ${per.label} is available` : `Payslip for ${per.label} is available`,
-        body: again ? "HR corrected this payslip and re-ran payroll. Please review the updated amounts." : "Net pay has been calculated for the whole team.",
+        title: again ? `Corrected ${docName(e.worker_type).toLowerCase()} for ${per.label} is available` : `${docName(e.worker_type)} for ${per.label} is available`,
+        body: again ? "HR corrected this and re-ran payroll. Please review the updated amounts." : "Your pay has been calculated from your clock in and clock out.",
         link: "/employee/payslips",
       })),
     );

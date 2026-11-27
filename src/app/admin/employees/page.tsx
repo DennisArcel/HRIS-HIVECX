@@ -10,10 +10,16 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Pr
   const { data } = await sb
     .from("profiles")
     .select(
-      "id, employee_code, full_name, username, email, position, department, worker_type, profile_complete, hired_on, salary_semi, birthday, phone, address, emergency_contact, shift_id, employment_status",
+      "id, employee_code, full_name, username, email, position, department, worker_type, profile_complete, hired_on, salary_semi, salary_monthly, birthday, phone, address, emergency_contact, shift_id, employment_status",
     )
     .eq("role", "employee")
     .order("employee_code");
+
+  // shift id → "09:00–18:00", for the Shift column and the profile window
+  const { data: sh } = await sb.from("shifts").select("id, start_time, end_time");
+  const shifts: Record<string, string> = Object.fromEntries(
+    (sh ?? []).map((s) => [s.id as string, `${String(s.start_time).slice(0, 5)}–${String(s.end_time).slice(0, 5)}`]),
+  );
 
   const all = (data ?? []) as Row[];
   const needle = q.trim().toLowerCase();
@@ -53,7 +59,7 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Pr
       </form>
 
       <div className="mt">
-        <EmployeeTable rows={rows} />
+        <EmployeeTable rows={rows} shifts={shifts} />
       </div>
     </>
   );

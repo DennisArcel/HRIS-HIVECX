@@ -2,7 +2,10 @@
 import { useMemo, useState, useTransition } from "react";
 import { Modal } from "@/components/ui";
 import { fmtDate, initials } from "@/lib/fmt";
-import { PHP, WHT_MONTHLY_FREE, computePay, contribFor, isIC, type Adj } from "@/lib/payroll-calc";
+import {
+  PHP, WHT_MONTHLY_FREE, MAX_CUTOFF_HOURS, computePay, contribFor, dailyRate, docName, isIC,
+  type Adj, type PayHours,
+} from "@/lib/payroll-calc";
 import { resetPayslip, savePayslip } from "./actions";
 
 export type PRow = {
@@ -10,21 +13,39 @@ export type PRow = {
   code: string;
   name: string;
   position: string | null;
-  department: string | null;
-  salary: number;
+  monthly: number;
   workerType: string;
   adj: Adj;
   otHours: number;
+  hours: PayHours;
 };
 type Period = { from: string; to: string; label: string };
 type Hol = { d: string; n: string };
 type XD = { label: string; amt: string; hd?: string };
 
 const num = (s: string) => Math.max(0, parseFloat(s) || 0);
-const row = (r: PRow) => ({ salary_semi: r.salary, worker_type: r.workerType });
+const row = (r: PRow) => ({ salary_monthly: r.monthly, worker_type: r.workerType });
+const hrs = (n: number) => n.toFixed(2).replace(/\.?0+$/, "") || "0";
+
+/** Read-only attendance summary taken from clock in / clock out. */
+function AttendanceBox({ h, rate }: { h: PayHours; rate: number }) {
+  return (
+    <div className="pe-sum" style={{ marginTop: 10 }}>
+      <div className="docgrid" style={{ margin: 0 }}>
+        <div className="k">Hours worked (from clock in / out)</div><div className="v">{hrs(h.hours)} hrs</div>
+        <div className="k">Days worked</div><div className="v">{h.days}</div>
+        {h.leaveDays > 0 && <><div className="k">Approved leave (8 hrs a day)</div><div className="v">{h.leaveDays} day{h.leaveDays === 1 ? "" : "s"}</div></>}
+        {h.absent > 0 && <><div className="k">Absent (unpaid)</div><div className="v">{h.absent} day{h.absent === 1 ? "" : "s"}</div></>}
+        {h.missingOut > 0 && <><div className="k">Clock-in without clock-out (unpaid until fixed)</div><div className="v">{h.missingOut} day{h.missingOut === 1 ? "" : "s"}</div></>}
+        <div className="k">Hourly rate</div><div className="v">{PHP(rate)}</div>
+      </div>
+    </div>
+  );
+}
 
 function Slip({ r, period, onClose, onEdit }: { r: PRow; period: Period; onClose: () => void; onEdit?: () => void }) {
-  const x = computePay(row(r), r.adj, r.otHours);
+  const x = computePay(row(r), r.adj, r.otHours, r.hours);
+  const doc = docName(r.workerType);
   const crow = (k: "sss" | "ph" | "pg", label: string) => {
     const nd = x[k] <= 0;
     return (
@@ -39,10 +60,10 @@ function Slip({ r, period, onClose, onEdit }: { r: PRow; period: Period; onClose
       <div className="slipdoc print-area">
         <div className="sphd">
           <div>
-            <div className="fig">PAYSLIP</div>
+            <div className="fig">{doc.toUpperCase()}</div>
             <h3 style={{ marginTop: 6 }}>{r.name}</h3>
             <div className="mut" style={{ fontSize: 13 }}>
-              {r.code} · {r.position} · {r.department}{isIC(row(r)) ? " · Independent contractor" : ""}
+              {r.code} · {r.position}{isIC(row(r)) ? " · Independent contractor" : ""}
             </div>
           </div>
           <div style={{ textAlign: "right" }}>
@@ -52,8 +73,8 @@ function Slip({ r, period, onClose, onEdit }: { r: PRow; period: Period; onClose
         </div>
         <div className="fig" style={{ marginTop: 14 }}>EARNINGS</div>
         <div className="docgrid">
-          <div className="k">Basic pay (semi-monthly)</div><div className="v">{PHP(x.half)}</div>
-          <div className="k">Allowances (transport &amp; COLA)</div><div className="v">{PHP(x.allow)}</div>
+          <div className="k">Basic pay ({hrs(x.hoursPaid ?? 0)} hrs × {PHP(x.rate)}/hr)</div><div className="v">{PHP(x.basic)}</div>
+          <div className="k">Allowances (transport &amp; COLA, 4% of basic)</div><div className="v">{PHP(x.allow)}</div>
           <div className="k">Overtime ({x.otHrs} hrs × 125%)</div><div className="v">{PHP(x.ot)}</div>
           {x.extras.filter((z) => +z.amt > 0).map((z, i) => (
             <div key={i} style={{ display: "contents" }}><div className="k">{z.label || "Additional pay"}</div><div className="v">{PHP(z.amt)}</div></div>
@@ -61,6 +82,11 @@ function Slip({ r, period, onClose, onEdit }: { r: PRow; period: Period; onClose
           <div className="k" style={{ fontWeight: 700, color: "var(--tx)" }}>Gross pay</div>
           <div className="v" style={{ fontWeight: 700 }}>{PHP(x.g)}</div>
         </div>
+        <p className="mut" style={{ fontSize: 12, margin: "8px 0 0" }}>
+          Hourly rate = monthly salary {PHP(x.monthly)} ÷ 20 days ÷ 8 hrs. {r.hours.days} day{r.hours.days === 1 ? "" : "s"} worked
+          {r.hours.leaveDays ? `, ${r.hours.leaveDays} on approved leave` : ""}
+          {x.capped ? `. Paid hours are capped at ${MAX_CUTOFF_HOURS} per cutoff.` : "."}
+        </p>
         <div className="fig" style={{ marginTop: 16 }}>DEDUCTIONS</div>
         <div className="docgrid">
           {crow("sss", "SSS contribution (5%)")}
@@ -80,7 +106,7 @@ function Slip({ r, period, onClose, onEdit }: { r: PRow; period: Period; onClose
         <div className="mact no-print">
           <button onClick={onClose}>Close</button>
           <button onClick={() => window.print()}>Print / Save as PDF</button>
-          {onEdit && <button className="pri" onClick={onEdit}>Edit payslip</button>}
+          {onEdit && <button className="pri" onClick={onEdit}>Edit {doc.toLowerCase()}</button>}
           <span className="mut" style={{ fontSize: 12, alignSelf: "center" }}>HR preview{onEdit ? "" : " · locked (payroll processed)"}</span>
         </div>
       </div>
@@ -91,9 +117,10 @@ function Slip({ r, period, onClose, onEdit }: { r: PRow; period: Period; onClose
 function EditSlip({ r, period, holidays, onClose }: { r: PRow; period: Period; holidays: Hol[]; onClose: () => void }) {
   const [pending, start] = useTransition();
   const [err, setErr] = useState("");
-  const def0 = contribFor(r.salary);
+  const doc = docName(r.workerType);
+  const def0 = contribFor(r.monthly / 2);
   const a = r.adj;
-  const [sal, setSal] = useState(String(r.salary));
+  const [sal, setSal] = useState(String(r.monthly));
   const [on, setOn] = useState(a ? !!(a.sss?.on || a.ph?.on || a.pg?.on) : !isIC(row(r)));
   const [sss, setSss] = useState(String(a?.sss?.amt ?? def0.sss));
   const [ph, setPh] = useState(String(a?.ph?.amt ?? def0.ph));
@@ -108,12 +135,12 @@ function EditSlip({ r, period, holidays, onClose }: { r: PRow; period: Period; h
     }),
     [on, sss, ph, pg, extras],
   );
-  const x = computePay({ salary_semi: num(sal), worker_type: r.workerType }, draft, r.otHours);
+  const x = computePay({ salary_monthly: num(sal), worker_type: r.workerType }, draft, r.otHours, r.hours);
   const free = holidays.filter((h) => !extras.some((e) => e.hd === h.d));
 
   function changeSalary(v: string) {
     setSal(v);
-    const d = contribFor(num(v));
+    const d = contribFor(num(v) / 2);
     setSss(String(d.sss)); setPh(String(d.ph)); setPg(String(d.pg));
   }
   const save = () =>
@@ -144,18 +171,24 @@ function EditSlip({ r, period, holidays, onClose }: { r: PRow; period: Period; h
 
   return (
     <Modal>
-      <div className="fig">EDIT PAYSLIP</div>
+      <div className="fig">EDIT {doc.toUpperCase()}</div>
       <h3 style={{ margin: "6px 0 2px" }}>{r.name}</h3>
       <div className="mut" style={{ fontSize: 13 }}>{r.code} · {period.label}</div>
       {err && <p className="err-box"><span>{err}</span></p>}
 
-      <div className="fig" style={{ marginTop: 18 }}>SALARY PER CUTOFF</div>
+      <div className="fig" style={{ marginTop: 18 }}>HOURS · FROM CLOCK IN / OUT</div>
       <p className="mut" style={{ fontSize: 12.5, margin: "4px 0 0" }}>
-        Change this if the salary changes. SSS, PhilHealth and Pag-IBIG are recomputed from the 2026 tables each time, and the new salary is saved to the employee&apos;s record when you press Save payslip.
+        Basic pay = hours worked × hourly rate. To change the hours, correct the clock times in Attendance.
+      </p>
+      <AttendanceBox h={r.hours} rate={x.rate} />
+
+      <div className="fig" style={{ marginTop: 18 }}>MONTHLY SALARY</div>
+      <p className="mut" style={{ fontSize: 12.5, margin: "4px 0 0" }}>
+        Hourly rate = monthly salary ÷ 20 days ÷ 8 hrs. Changing it updates the employee&apos;s record when you press Save, and applies to every pay period. SSS, PhilHealth and Pag-IBIG are recomputed from the 2026 tables.
       </p>
       <div className="pe-row" style={{ marginTop: 12 }}>
-        <span style={{ fontSize: 14 }}>Salary per cutoff (₱)</span>
-        <input type="number" min="0" step="0.01" value={sal} aria-label="Salary per cutoff" onChange={(e) => changeSalary(e.target.value)} />
+        <span style={{ fontSize: 14 }}>Monthly salary (₱) · {PHP(x.rate)}/hr</span>
+        <input type="number" min="0" step="0.01" value={sal} aria-label="Monthly salary" onChange={(e) => changeSalary(e.target.value)} />
       </div>
 
       <div className="fig" style={{ marginTop: 18 }}>SSS · PHILHEALTH · PAG-IBIG</div>
@@ -175,7 +208,7 @@ function EditSlip({ r, period, holidays, onClose }: { r: PRow; period: Period; h
       <p className="mut" style={{ fontSize: 12.5, margin: "4px 0 0" }}>
         Holidays are unpaid by default. Add holiday pay (defaults to one day&apos;s pay) or any other extra pay only when it applies.
       </p>
-      {extras.length === 0 && <p className="mut" style={{ fontSize: 13, margin: "10px 0 0" }}>No additional pay on this payslip.</p>}
+      {extras.length === 0 && <p className="mut" style={{ fontSize: 13, margin: "10px 0 0" }}>No additional pay on this {doc.toLowerCase()}.</p>}
       {extras.map((e, i) => (
         <div className="pe-extra" key={i}>
           <input value={e.label} placeholder="Description" aria-label="Additional pay description"
@@ -193,7 +226,7 @@ function EditSlip({ r, period, holidays, onClose }: { r: PRow; period: Period; h
             </select>
             <button className="sm" type="button" onClick={() => {
               const h = free.find((f) => f.d === (hol || free[0].d))!;
-              setExtras([...extras, { label: "Holiday pay — " + h.n, amt: String(Math.round((num(sal) * 2) / 22)), hd: h.d }]);
+              setExtras([...extras, { label: "Holiday pay — " + h.n, amt: String(dailyRate(num(sal))), hd: h.d }]);
               setHol("");
             }}>+ Add holiday pay</button>
           </>
@@ -206,6 +239,7 @@ function EditSlip({ r, period, holidays, onClose }: { r: PRow; period: Period; h
       <div className="fig" style={{ marginTop: 18 }}>WITHHOLDING TAX · AUTOMATIC</div>
       <div className="pe-sum">
         <div className="docgrid" style={{ margin: 0 }}>
+          {line(`Basic pay (${hrs(x.hoursPaid ?? 0)} hrs × ${PHP(x.rate)})`, PHP(x.basic))}
           {line("Gross pay", PHP(x.g))}
           {line("Contributions deducted", "−" + PHP(x.sss + x.ph + x.pg))}
           {line("Taxable income (gross − allowances − contributions)", PHP(x.taxable))}
@@ -222,7 +256,7 @@ function EditSlip({ r, period, holidays, onClose }: { r: PRow; period: Period; h
       <div className="mact no-print">
         {r.adj && <button className="dngr" disabled={pending} onClick={reset}>Reset to standard</button>}
         <button onClick={onClose}>Cancel</button>
-        <button className="pri" disabled={pending} onClick={save}>{pending ? "Saving…" : "Save payslip"}</button>
+        <button className="pri" disabled={pending} onClick={save}>{pending ? "Saving…" : `Save ${doc.toLowerCase()}`}</button>
       </div>
     </Modal>
   );
@@ -238,17 +272,21 @@ export function PayrollTable({ rows, period, locked, holidays }: { rows: PRow[];
     <>
       <div className="card flat wrap" style={{ padding: 8 }}>
         <table>
-          <thead><tr>{["Employee", "Gross", "Deductions", "Net", ""].map((h) => <th key={h}>{h}</th>)}</tr></thead>
+          <thead><tr>{["Employee", "Hours", "Gross", "Deductions", "Net", ""].map((h) => <th key={h}>{h}</th>)}</tr></thead>
           <tbody>
-            {rows.length === 0 && <tr><td className="mut" colSpan={5}>No employees yet.</td></tr>}
+            {rows.length === 0 && <tr><td className="mut" colSpan={6}>No employees yet.</td></tr>}
             {rows.map((r) => {
-              const x = computePay(row(r), r.adj, r.otHours);
+              const x = computePay(row(r), r.adj, r.otHours, r.hours);
               return (
                 <tr key={r.id}>
                   <td>
                     <span className="av">{initials(r.name)}</span>{r.name}
-                    {isIC(row(r)) && <> <span className="tag">Contractor</span></>}
+                    {isIC(row(r)) && <> <span className="tag">Contractor · Settlement</span></>}
                     {x.edited && <> <span className="tag info">Edited</span></>}
+                  </td>
+                  <td>
+                    {hrs(r.hours.hours)} h
+                    {r.hours.missingOut > 0 && <> <span className="tag wait" title="Clock-in with no clock-out. Unpaid until fixed in Attendance.">{r.hours.missingOut} no clock-out</span></>}
                   </td>
                   <td>{PHP(x.g)}</td>
                   <td><span className="mut">−{PHP(x.ded)}</span></td>
@@ -264,7 +302,8 @@ export function PayrollTable({ rows, period, locked, holidays }: { rows: PRow[];
         </table>
       </div>
       {view && <Slip r={fresh(view)!} period={period} onClose={() => setView(null)} onEdit={locked ? undefined : () => { setEdit(view); setView(null); }} />}
-      {edit && <EditSlip key={edit.id + JSON.stringify(fresh(edit)!.adj) + fresh(edit)!.salary} r={fresh(edit)!} period={period} holidays={holidays} onClose={() => setEdit(null)} />}
+      {edit && <EditSlip key={edit.id + JSON.stringify(fresh(edit)!.adj) + fresh(edit)!.monthly + fresh(edit)!.hours.hours} r={fresh(edit)!} period={period} holidays={holidays} onClose={() => setEdit(null)} />}
     </>
   );
 }
+

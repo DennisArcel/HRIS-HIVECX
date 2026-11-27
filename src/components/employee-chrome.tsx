@@ -39,8 +39,7 @@ export function SideNav({ name, role }: { name: string; role: string }) {
           <span className="av">{name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()}</span>
           <span><b>{name}</b><span>{role}</span></span>
         </div>
-        <button className="ni" disabled={pending} onClick={() => start(() => signOut())}>
-          <Icon name="out" /><span>{pending ? "Signing out…" : "Sign out"}</span>
+<button className="ni" suppressHydrationWarning disabled={pending} onClick={() => start(() => signOut())}>          <Icon name="out" /><span>{pending ? "Signing out…" : "Sign out"}</span>
         </button>
       </div>
     </>

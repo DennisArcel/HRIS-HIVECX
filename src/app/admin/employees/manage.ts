@@ -25,11 +25,33 @@ const schema = z.object({
   s: z.coerce.number().positive("Enter a valid monthly salary."),
   ty: z.enum(["Employee", "Independent contractor"]),
   j: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Choose the date hired."),
+  ss: z.string().regex(/^\d{2}:\d{2}$/, "Choose the time the shift starts."),
+  se: z.string().regex(/^\d{2}:\d{2}$/, "Choose the time the shift ends."),
   pw: z.string().min(6, "Enter a temporary password (at least 6 characters) or click Generate."),
 });
 
 const CHARS = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
 const genTemp = () => Array.from({ length: 10 }, () => CHARS[randomInt(CHARS.length)]).join("");
+
+const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+const PAID_MIN = 8 * 60; // 8 paid hours a day; anything longer in the shift is the unpaid break
+
+/**
+ * Finds the shift with these start/end times (Mon–Fri, rest days Sat + Sun) or creates it.
+ * Existing shifts ('day' 09:00–18:00, 'mid' 12:00–21:00) are reused, so nothing else in the app changes.
+ */
+async function shiftIdFor(start: string, end: string): Promise<{ id: string } | { error: string }> {
+  const db = supabaseAdmin();
+  const { data: found } = await db.from("shifts").select("id, rest_days").eq("start_time", start).eq("end_time", end);
+  const same = (found ?? []).find((s) => JSON.stringify([...(s.rest_days ?? [])].sort()) === "[0,6]");
+  if (same) return { id: same.id as string };
+  const id = `s${start.replace(":", "")}_${end.replace(":", "")}`;
+  const { error } = await db
+    .from("shifts")
+    .upsert({ id, name: `${start}–${end}`, start_time: start, end_time: end, rest_days: [0, 6] }, { onConflict: "id", ignoreDuplicates: true });
+  if (error) return { error: "Couldn't save the shift: " + error.message };
+  return { id };
+}
 
 async function audit(admin: { id: string; name: string }, action: string, detail: string) {
   await supabaseAdmin().from("audit_log").insert({ actor: admin.id, actor_name: admin.name, action, detail });
@@ -46,6 +68,13 @@ export async function createEmployee(fd: FormData): Promise<Result> {
   const code = v.code;
   const { data: dupe } = await db.from("profiles").select("id").eq("employee_code", code).maybeSingle();
   if (dupe) return { error: "That Employee ID is already assigned to another employee." };
+
+  // shift: starts at / ends at
+  const len = toMin(v.se) - toMin(v.ss);
+  if (len <= 0) return { error: "The shift must end later in the same day than it starts. Overnight shifts aren't supported yet." };
+  if (len < PAID_MIN) return { error: "A shift must be at least 8 hours long (8 paid hours plus any break)." };
+  const shift = await shiftIdFor(v.ss, v.se);
+  if ("error" in shift) return { error: shift.error };
 
   const { data: created, error: authErr } = await db.auth.admin.createUser({
     email: v.email,
@@ -71,9 +100,10 @@ export async function createEmployee(fd: FormData): Promise<Result> {
     email: v.email,
     role: "employee",
     position: v.r,
-    salary_semi: Math.round((v.s / 2) * 100) / 100, // HR enters monthly; stored per cutoff
+    salary_monthly: v.s, // HR enters the monthly salary. Hourly rate = monthly ÷ 20 days ÷ 8 hrs
     worker_type: v.ty,
     hired_on: v.j,
+    shift_id: shift.id,
     profile_complete: false,
   });
   if (profErr) {
@@ -88,7 +118,7 @@ export async function createEmployee(fd: FormData): Promise<Result> {
     };
   }
 
-  await audit(admin, "Employee account created", `${v.n} · ${code} · username ${v.user}`);
+  await audit(admin, "Employee account created", `${v.n} · ${code} · username ${v.user} · shift ${v.ss}–${v.se}`);
   revalidatePath("/admin/employees");
   revalidatePath("/admin/dashboard");
   return { ok: true, creds: { id: code, name: v.n, user: v.user, pw: v.pw } };

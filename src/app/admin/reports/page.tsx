@@ -1,12 +1,13 @@
 import { supabaseServer } from "@/lib/supabase/server";
 import { ExportButton } from "@/components/ui";
+import { manilaNow } from "@/lib/dates";
 import { ReportPreview } from "./ReportPreview";
 
 export const dynamic = "force-dynamic";
 
 export default async function ReportsPage() {
   const sb = await supabaseServer();
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
+  const today = manilaNow().date; // same "today" as the rest of the app
   const c = { count: "exact" as const, head: true };
 
   const [emps, present, lvOk, lvPend, fixPend, audit, bonQ, bonV] = await Promise.all([

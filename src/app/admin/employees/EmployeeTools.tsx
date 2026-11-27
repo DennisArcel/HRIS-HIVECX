@@ -2,6 +2,7 @@
 import { FormEvent, useState, useTransition } from "react";
 import { Modal } from "@/components/ui";
 import { fmtDate, initials, type Creds, type Row } from "@/lib/fmt";
+import { PHP, hourlyRate } from "@/lib/payroll-calc";
 import { createEmployee, removeEmployee, resetTempPassword, setWorkerType } from "./manage";
 
 const genTemp = () => {
@@ -12,7 +13,6 @@ const genTemp = () => {
 };
 const slug = (n: string) =>
   n.trim().toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean).join(".");
-const SHIFTS: Record<string, string> = { day: "Day Shift · 09:00–18:00", mid: "Mid Shift · 12:00–21:00" };
 
 function CredsModal({ c, created, onClose }: { c: Creds; created: boolean; onClose: () => void }) {
   const text = `Hive HRIS sign-in\nName: ${c.name}\nUsername: ${c.user}\nTemporary password: ${c.pw}\nYou'll be asked to complete your profile and choose a new password on your first sign-in.`;
@@ -95,6 +95,7 @@ export function CreateEmployeeForm() {
             <span>{err}</span>
           </p>
         )}
+
         <div>
           <label htmlFor="aeC">Employee ID <span className="req">*</span></label>
           <input id="aeC" name="code" required autoComplete="off" placeholder="e.g. HV-001" />
@@ -117,6 +118,7 @@ export function CreateEmployeeForm() {
             onChange={(e) => { setUser(e.target.value); setTouched((t) => ({ ...t, user: true })); }}
           />
         </div>
+
         <div>
           <label htmlFor="aeR">Position <span className="req">*</span></label>
           <input id="aeR" name="r" required />
@@ -136,6 +138,19 @@ export function CreateEmployeeForm() {
           <label htmlFor="aeJ">Date hired <span className="req">*</span></label>
           <input id="aeJ" name="j" type="date" required defaultValue={new Date().toLocaleDateString("en-CA")} />
         </div>
+
+        <div>
+          <label htmlFor="aeSS">Shift starts at <span className="req">*</span></label>
+          <input id="aeSS" name="ss" type="time" required defaultValue="09:00" />
+        </div>
+        <div>
+          <label htmlFor="aeSE">Shift ends at <span className="req">*</span></label>
+          <input id="aeSE" name="se" type="time" required defaultValue="18:00" />
+        </div>
+        <div className="hintbox full">
+          Paid time is 8 hours a day. Anything longer in the shift is the unpaid break, so 09:00–18:00 has a 1-hour break. Rest days are Saturday and Sunday. The shift must start and end on the same day.
+        </div>
+
         <div className="full">
           <label htmlFor="aeW">Temporary password <span className="req">*</span></label>
           <div className="pw">
@@ -161,7 +176,7 @@ export function CreateEmployeeForm() {
   );
 }
 
-export function EmployeeTable({ rows }: { rows: Row[] }) {
+export function EmployeeTable({ rows, shifts }: { rows: Row[]; shifts: Record<string, string> }) {
   const [pending, start] = useTransition();
   const [profile, setProfile] = useState<Row | null>(null);
   const [confirm, setConfirm] = useState<Row | null>(null);
@@ -185,14 +200,14 @@ export function EmployeeTable({ rows }: { rows: Row[] }) {
         <table>
           <thead>
             <tr>
-              {["Employee", "Position", "Worker type", "Account", "Hired", ""].map((h) => (
+              {["Employee", "Position", "Shift", "Worker type", "Account", "Hired", ""].map((h) => (
                 <th key={h}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td className="mut" colSpan={6}>No employees yet.</td></tr>
+              <tr><td className="mut" colSpan={7}>No employees yet.</td></tr>
             )}
             {rows.map((e) => (
               <tr key={e.id}>
@@ -202,6 +217,7 @@ export function EmployeeTable({ rows }: { rows: Row[] }) {
                   <div className="fig" style={{ marginLeft: 38 }}>{e.employee_code} · {e.username}</div>
                 </td>
                 <td>{e.position}</td>
+                <td>{shifts[e.shift_id] ?? e.shift_id}</td>
                 <td>
                   <select
                     value={e.worker_type}
@@ -218,9 +234,9 @@ export function EmployeeTable({ rows }: { rows: Row[] }) {
                 </td>
                 <td>{fmtDate(e.hired_on)}</td>
                 <td>
-                  <button className="sm" onClick={() => setProfile(e)}>Profile</button>{" "}
-                  {!e.profile_complete && (
-                    <>
+                  <div className="acts">
+                    <button className="sm" onClick={() => setProfile(e)}>Profile</button>
+                    {!e.profile_complete && (
                       <button
                         className="sm"
                         onClick={() =>
@@ -232,10 +248,10 @@ export function EmployeeTable({ rows }: { rows: Row[] }) {
                         }
                       >
                         New temp password
-                      </button>{" "}
-                    </>
-                  )}
-                  <button className="sm dngr" onClick={() => setConfirm(e)}>Remove</button>
+                      </button>
+                    )}
+                    <button className="sm dngr" onClick={() => setConfirm(e)}>Remove</button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -256,12 +272,13 @@ export function EmployeeTable({ rows }: { rows: Row[] }) {
             ["Date hired", fmtDate(profile.hired_on)],
             ["Username", profile.username],
             ["Birthday", profile.birthday ? fmtDate(profile.birthday) : "—"],
-            ["Monthly salary", "₱" + (Number(profile.salary_semi ?? 0) * 2).toLocaleString("en-PH", { minimumFractionDigits: 2 })],
+            ["Monthly salary", PHP(Number((profile as Row & { salary_monthly?: number | string | null }).salary_monthly ?? 0))],
+            ["Hourly rate (monthly ÷ 20 days ÷ 8 hrs)", PHP(hourlyRate(Number((profile as Row & { salary_monthly?: number | string | null }).salary_monthly ?? 0)))],
             ["Email", profile.email],
             ["Contact", profile.phone || "—"],
             ["Address", profile.address || "—"],
             ["Emergency contact", profile.emergency_contact || "—"],
-            ["Assigned shift", SHIFTS[profile.shift_id] ?? profile.shift_id],
+            ["Assigned shift", shifts[profile.shift_id] ?? profile.shift_id],
           ] as [string, string | null][]).map(([k, v]) => (
             <div className="ls" key={k}>
               <span className="mut">{k}</span><br />{v}
