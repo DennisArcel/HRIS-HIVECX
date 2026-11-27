@@ -26,6 +26,8 @@ type XD = { label: string; amt: string; hd?: string };
 const num = (s: string) => Math.max(0, parseFloat(s) || 0);
 const row = (r: PRow) => ({ salary_monthly: r.monthly, worker_type: r.workerType });
 const hrs = (n: number) => n.toFixed(2).replace(/\.?0+$/, "") || "0";
+/** Negative amounts read "−₱850.00", not "₱-850.00". */
+const money = (n: number) => (n < 0 ? "−" + PHP(-n) : PHP(n));
 
 /** Read-only attendance summary taken from clock in / clock out. */
 function AttendanceBox({ h, rate }: { h: PayHours; rate: number }) {
@@ -98,7 +100,7 @@ function Slip({ r, period, onClose, onEdit }: { r: PRow; period: Period; onClose
           <div className="v" style={{ fontWeight: 700 }}>−{PHP(x.ded)}</div>
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, flexWrap: "wrap", marginTop: 18, paddingTop: 14, borderTop: "2px solid var(--ac)" }}>
-          <div><div className="fig">NET PAY</div><div className="net">{PHP(x.net)}</div></div>
+          <div><div className="fig">NET PAY</div><div className="net">{money(x.net)}</div></div>
           <div className="mut" style={{ fontSize: 12, maxWidth: "38ch" }}>
             Withholding tax follows the BIR TRAIN semi-monthly table (nothing is withheld up to ₱10,417 taxable per cutoff). Allowances are treated as non-taxable de minimis benefits.
           </div>
@@ -244,7 +246,7 @@ function EditSlip({ r, period, holidays, onClose }: { r: PRow; period: Period; h
           {line("Contributions deducted", "−" + PHP(x.sss + x.ph + x.pg))}
           {line("Taxable income (gross − allowances − contributions)", PHP(x.taxable))}
           {line("Withholding tax (automatic)", "−" + PHP(x.tx))}
-          {line("Net pay", PHP(x.net), true)}
+          {line("Net pay", money(x.net), true)}
         </div>
         <div className="mut" style={{ fontSize: 12, marginTop: 10 }}>
           {x.tx > 0
@@ -270,28 +272,66 @@ export function PayrollTable({ rows, period, locked, holidays }: { rows: PRow[];
 
   return (
     <>
-      <div className="card flat wrap" style={{ padding: 8 }}>
-        <table>
-          <thead><tr>{["Employee", "Hours", "Gross", "Deductions", "Net", ""].map((h) => <th key={h}>{h}</th>)}</tr></thead>
+      <style>{`
+        .paytbl{width:100%;border-collapse:collapse}
+        .paytbl th{white-space:nowrap;text-align:left;padding:14px 18px;font-weight:500}
+        .paytbl td{padding:18px;vertical-align:middle;border-top:1px solid var(--line, #2a2a2a)}
+        .paytbl tbody tr:first-child td{border-top:0}
+        .paytbl .num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+        .paytbl .who{display:flex;align-items:center;gap:14px;min-width:220px}
+        .paytbl .sub{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+        .paytbl .note{font-size:12px;margin-top:5px}
+        .paytbl .end{text-align:right;white-space:nowrap}
+        .paytbl .neg{color:var(--bad, #ff6b6b)}
+      `}</style>
+      <div className="card flat wrap" style={{ padding: 8, overflowX: "auto" }}>
+        <table className="paytbl">
+          <thead>
+            <tr>
+              <th>Employee</th>
+              <th className="num">Hours</th>
+              <th className="num">Gross</th>
+              <th className="num">Deductions</th>
+              <th className="num">Net pay</th>
+              <th />
+            </tr>
+          </thead>
           <tbody>
             {rows.length === 0 && <tr><td className="mut" colSpan={6}>No employees yet.</td></tr>}
             {rows.map((r) => {
               const x = computePay(row(r), r.adj, r.otHours, r.hours);
+              const ic = isIC(row(r));
               return (
                 <tr key={r.id}>
                   <td>
-                    <span className="av">{initials(r.name)}</span>{r.name}
-                    {isIC(row(r)) && <> <span className="tag">Contractor · Settlement</span></>}
-                    {x.edited && <> <span className="tag info">Edited</span></>}
+                    <div className="who">
+                      <span className="av" style={{ flex: "none" }}>{initials(r.name)}</span>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600 }}>{r.name}</div>
+                        {(ic || x.edited) && (
+                          <div className="sub">
+                            {ic && <span className="tag">Contractor · Settlement</span>}
+                            {x.edited && <span className="tag info">Edited</span>}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </td>
-                  <td>
-                    {hrs(r.hours.hours)} h
-                    {r.hours.missingOut > 0 && <> <span className="tag wait" title="Clock-in with no clock-out. Unpaid until fixed in Attendance.">{r.hours.missingOut} no clock-out</span></>}
+                  <td className="num">
+                    <div>{hrs(r.hours.hours)} h</div>
+                    {r.hours.missingOut > 0 && (
+                      <div className="note">
+                        <span className="tag wait" title="Clock-in with no clock-out. Unpaid until fixed in Attendance.">{r.hours.missingOut} no clock-out</span>
+                      </div>
+                    )}
                   </td>
-                  <td>{PHP(x.g)}</td>
-                  <td><span className="mut">−{PHP(x.ded)}</span></td>
-                  <td><b>{PHP(x.net)}</b></td>
-                  <td>
+                  <td className="num">{PHP(x.g)}</td>
+                  <td className="num mut">{x.ded > 0 ? "−" + PHP(x.ded) : PHP(0)}</td>
+                  <td className="num">
+                    <b className={x.net < 0 ? "neg" : undefined}>{money(x.net)}</b>
+                    {x.net < 0 && <div className="note neg">Deductions exceed pay</div>}
+                  </td>
+                  <td className="end">
                     <button className="sm" onClick={() => setView(r)}>Preview</button>
                     {!locked && <> <button className="sm" onClick={() => setEdit(r)}>Edit</button></>}
                   </td>
@@ -306,4 +346,3 @@ export function PayrollTable({ rows, period, locked, holidays }: { rows: PRow[];
     </>
   );
 }
-

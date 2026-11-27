@@ -124,20 +124,81 @@ export async function createEmployee(fd: FormData): Promise<Result> {
   return { ok: true, creds: { id: code, name: v.n, user: v.user, pw: v.pw } };
 }
 
-export async function setWorkerType(id: string, ty: string): Promise<{ error?: string }> {
+const editSchema = schema.omit({ ty: true, pw: true }).extend({
+  bd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Enter a valid birthday.").or(z.literal("")),
+  ph: z.string().trim().max(40, "Contact number is too long."),
+  addr: z.string().trim().max(200, "Address is too long."),
+  ec: z.string().trim().max(120, "Emergency contact is too long."),
+});
+
+/** Admin edits an employee's details. Worker type is deliberately not editable here (it is fixed when the account is created). */
+export async function updateEmployee(id: string, fd: FormData): Promise<{ error?: string }> {
   const admin = await requireAdmin();
-  const type = ty === "Independent contractor" ? "Independent contractor" : "Employee";
-  const { data, error } = await supabaseAdmin()
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return { error: "Bad employee id." };
+  const parsed = editSchema.safeParse(Object.fromEntries(fd));
+  if (!parsed.success) return { error: parsed.error.issues[0].message };
+  const v = parsed.data;
+  const db = supabaseAdmin();
+
+  const { data: old } = await db
     .from("profiles")
-    .update({ worker_type: type })
+    .select("role, employee_code, full_name, username, email, position, salary_monthly, hired_on, shift_id, birthday, phone, address, emergency_contact")
     .eq("id", id)
-    .select("full_name")
     .single();
-  if (error) return { error: error.message };
-  await audit(admin, "Worker type changed", `${data.full_name} → ${type}`);
+  if (!old) return { error: "Employee not found." };
+  if (old.role !== "employee") return { error: "Only employee accounts can be edited here." };
+
+  if (v.bd && v.bd > new Date().toLocaleDateString("en-CA")) return { error: "The birthday can't be in the future." };
+  if (v.code !== old.employee_code) {
+    const { data: dupe } = await db.from("profiles").select("id").eq("employee_code", v.code).neq("id", id).maybeSingle();
+    if (dupe) return { error: "That Employee ID is already assigned to another employee." };
+  }
+  const len = toMin(v.se) - toMin(v.ss);
+  if (len <= 0) return { error: "The shift must end later in the same day than it starts. Overnight shifts aren't supported yet." };
+  if (len < PAID_MIN) return { error: "A shift must be at least 8 hours long (8 paid hours plus any break)." };
+  const shift = await shiftIdFor(v.ss, v.se);
+  if ("error" in shift) return { error: shift.error };
+
+  const { error: pe } = await db
+    .from("profiles")
+    .update({
+      employee_code: v.code, full_name: v.n, username: v.user, email: v.email, position: v.r,
+      salary_monthly: v.s, hired_on: v.j, shift_id: shift.id,
+      birthday: v.bd || null, phone: v.ph || null, address: v.addr || null, emergency_contact: v.ec || null,
+    })
+    .eq("id", id);
+  if (pe) {
+    return {
+      error:
+        pe.code === "23505"
+          ? /employee_code/.test(pe.message) ? "That Employee ID is already assigned to another employee." : "That username is already used. Pick another one."
+          : "Couldn't save the changes: " + pe.message,
+    };
+  }
+
+  // the sign-in email lives in Supabase Auth too; keep both in step (and undo if Auth refuses)
+  if (v.email !== old.email) {
+    const { error: ae } = await db.auth.admin.updateUserById(id, { email: v.email, email_confirm: true });
+    if (ae) {
+      await db.from("profiles").update({ email: old.email }).eq("id", id);
+      const dup = (ae as { code?: string }).code === "email_exists" || /already been registered/i.test(ae.message);
+      return { error: dup ? "That email is already linked to another account." : `Couldn't change the email: ${ae.message}` };
+    }
+  }
+
+  const changed = [
+    v.code !== old.employee_code && "Employee ID", v.n !== old.full_name && "Name", v.user !== old.username && "Username",
+    v.email !== old.email && "Email", v.r !== old.position && "Position", Number(old.salary_monthly ?? 0) !== v.s && "Monthly salary",
+    v.j !== old.hired_on && "Date hired", shift.id !== old.shift_id && "Shift", (v.bd || null) !== (old.birthday ?? null) && "Birthday",
+    (v.ph || null) !== (old.phone ?? null) && "Contact number", (v.addr || null) !== (old.address ?? null) && "Address",
+    (v.ec || null) !== (old.emergency_contact ?? null) && "Emergency contact",
+  ].filter(Boolean);
+  if (changed.length) await audit(admin, "Employee details edited", `${v.n} · ${v.code} · ${changed.join(", ")}`);
   revalidatePath("/admin/employees");
+  revalidatePath("/admin/dashboard");
   return {};
 }
+
 
 export async function removeEmployee(id: string): Promise<{ error?: string }> {
   const admin = await requireAdmin();

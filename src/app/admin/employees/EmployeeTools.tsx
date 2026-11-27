@@ -3,7 +3,7 @@ import { FormEvent, useState, useTransition } from "react";
 import { Modal } from "@/components/ui";
 import { fmtDate, initials, type Creds, type Row } from "@/lib/fmt";
 import { PHP, hourlyRate } from "@/lib/payroll-calc";
-import { createEmployee, removeEmployee, resetTempPassword, setWorkerType } from "./manage";
+import { createEmployee, removeEmployee, resetTempPassword, updateEmployee } from "./manage";
 
 const genTemp = () => {
   const c = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
@@ -176,12 +176,111 @@ export function CreateEmployeeForm() {
   );
 }
 
+type SalaryRow = Row & { salary_monthly?: number | string | null };
+
+/** Admin-only edit form for one employee. Worker type is shown but locked: it is set when the account is created. */
+function EditEmployeeModal({ e, shifts, onClose }: { e: Row; shifts: Record<string, string>; onClose: () => void }) {
+  const [pending, start] = useTransition();
+  const [err, setErr] = useState("");
+  const [ss, se] = (shifts[e.shift_id] ?? "09:00–18:00").split("–");
+  const salary = Number((e as SalaryRow).salary_monthly ?? 0);
+
+  function onSubmit(ev: FormEvent<HTMLFormElement>) {
+    ev.preventDefault();
+    const fd = new FormData(ev.currentTarget);
+    setErr("");
+    start(async () => {
+      const r = await updateEmployee(e.id, fd);
+      if (r.error) return setErr(r.error);
+      onClose();
+    });
+  }
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="fig">EDIT EMPLOYEE</div>
+      <h3 style={{ margin: "6px 0 4px" }}>{e.full_name}</h3>
+      <p className="mut" style={{ fontSize: 13, margin: 0 }}>
+        Changes are saved to the employee&apos;s record and logged in the audit trail.
+      </p>
+      <form onSubmit={onSubmit} noValidate>
+        {err && <p className="err-box"><span>{err}</span></p>}
+        <div>
+          <label htmlFor="eeC">Employee ID <span className="req">*</span></label>
+          <input id="eeC" name="code" required autoComplete="off" defaultValue={e.employee_code ?? ""} />
+        </div>
+        <div>
+          <label htmlFor="eeN">Full name <span className="req">*</span></label>
+          <input id="eeN" name="n" required autoComplete="off" defaultValue={e.full_name} />
+        </div>
+        <div>
+          <label htmlFor="eeM">Work email <span className="req">*</span></label>
+          <input id="eeM" name="email" type="email" required autoComplete="off" defaultValue={e.email ?? ""} />
+        </div>
+        <div>
+          <label htmlFor="eeU">Username <span className="req">*</span></label>
+          <input id="eeU" name="user" required autoComplete="off" defaultValue={e.username ?? ""} />
+        </div>
+        <div>
+          <label htmlFor="eeR">Position <span className="req">*</span></label>
+          <input id="eeR" name="r" required defaultValue={e.position ?? ""} />
+        </div>
+        <div>
+          <label htmlFor="eeS">Monthly salary (₱ per month) <span className="req">*</span></label>
+          <input id="eeS" name="s" type="number" min="0" step="any" required defaultValue={salary || ""} />
+        </div>
+        <div>
+          <label htmlFor="eeW">Worker type</label>
+          <input id="eeW" value={e.worker_type ?? ""} readOnly disabled aria-describedby="eeWh" />
+        </div>
+        <div>
+          <label htmlFor="eeJ">Date hired <span className="req">*</span></label>
+          <input id="eeJ" name="j" type="date" required defaultValue={e.hired_on ?? ""} />
+        </div>
+        <div>
+          <label htmlFor="eeSS">Shift starts at <span className="req">*</span></label>
+          <input id="eeSS" name="ss" type="time" required defaultValue={ss} />
+        </div>
+        <div>
+          <label htmlFor="eeSE">Shift ends at <span className="req">*</span></label>
+          <input id="eeSE" name="se" type="time" required defaultValue={se} />
+        </div>
+        <div className="hintbox full" id="eeWh">
+          Worker type is set when the account is created and can&apos;t be changed. Shifts must be at least 8 hours long, Monday to Friday. Changing the hire date changes when attendance and leave start counting.
+        </div>
+        <div>
+          <label htmlFor="eeB">Birthday</label>
+          <input id="eeB" name="bd" type="date" defaultValue={e.birthday ?? ""} max={new Date().toLocaleDateString("en-CA")} />
+        </div>
+        <div>
+          <label htmlFor="eeP">Contact number</label>
+          <input id="eeP" name="ph" type="tel" autoComplete="off" defaultValue={e.phone ?? ""} />
+        </div>
+        <div className="full">
+          <label htmlFor="eeA">Home address</label>
+          <input id="eeA" name="addr" autoComplete="off" defaultValue={e.address ?? ""} />
+        </div>
+        <div className="full">
+          <label htmlFor="eeE">Emergency contact</label>
+          <input id="eeE" name="ec" autoComplete="off" placeholder="Name · phone number" defaultValue={e.emergency_contact ?? ""} />
+        </div>
+        <div className="full mact" style={{ margin: 0 }}>
+          <button type="button" onClick={onClose}>Cancel</button>
+          <button className="pri" type="submit" disabled={pending}>{pending ? "Saving…" : "Save changes"}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 export function EmployeeTable({ rows, shifts }: { rows: Row[]; shifts: Record<string, string> }) {
   const [pending, start] = useTransition();
   const [profile, setProfile] = useState<Row | null>(null);
+  const [editing, setEditing] = useState<Row | null>(null);
   const [confirm, setConfirm] = useState<Row | null>(null);
   const [creds, setCreds] = useState<Creds | null>(null);
   const [msg, setMsg] = useState("");
+  const [menu, setMenu] = useState<string | null>(null); // which row's "more" menu is open
 
   const run = (fn: () => Promise<{ error?: string }>) =>
     start(async () => {
@@ -196,61 +295,97 @@ export function EmployeeTable({ rows, shifts }: { rows: Row[]; shifts: Record<st
           <span>{msg}</span>
         </p>
       )}
-      <div className="card flat wrap" style={{ padding: 8, opacity: pending ? 0.7 : 1 }}>
-        <table>
+      <style>{`
+        .emptbl{width:100%;border-collapse:collapse}
+        .emptbl th{white-space:nowrap;text-align:left;padding:14px 18px;font-weight:500}
+        .emptbl td{padding:18px;vertical-align:middle;border-top:1px solid var(--line, #2a2a2a)}
+        .emptbl tr:first-child td{border-top:0}
+        .emptbl .who{display:flex;align-items:center;gap:14px;min-width:230px}
+        .emptbl .sub{color:var(--mut, #9a9a9a);font-size:12.5px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:210px}
+        .emptbl .nw{white-space:nowrap}
+        .emptbl select.quiet{width:auto;padding:7px 12px;font-size:13px;background:transparent}
+        .emptbl .end{text-align:right;white-space:nowrap}
+        .emptbl .pop{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:190px;padding:6px;border-radius:12px;
+          background:var(--panel, #181818);border:1px solid var(--line, #2a2a2a);box-shadow:0 12px 32px rgba(0,0,0,.35);text-align:left}
+        .emptbl .pop button{display:block;width:100%;text-align:left;border:0;background:transparent;color:var(--tx, inherit);
+          padding:10px 12px;border-radius:8px;font:inherit;font-size:13.5px;cursor:pointer}
+        .emptbl .pop button:hover{background:rgba(255,255,255,.06)}
+        .emptbl .pop button.bad{color:var(--bad, #ff6b6b)}
+        @media (max-width: 900px){ .emptbl .hide-sm{display:none} }
+      `}</style>
+      {menu && <div onClick={() => setMenu(null)} style={{ position: "fixed", inset: 0, zIndex: 20 }} />}
+      <div className="card flat wrap" style={{ padding: 8, opacity: pending ? 0.7 : 1, overflowX: "auto" }}>
+        <table className="emptbl">
           <thead>
             <tr>
-              {["Employee", "Position", "Shift", "Worker type", "Account", "Hired", ""].map((h) => (
-                <th key={h}>{h}</th>
-              ))}
+              <th>Employee</th>
+              <th>Position</th>
+              <th className="hide-sm">Worker type</th>
+              <th>Status</th>
+              <th className="hide-sm">Hired</th>
+              <th />
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td className="mut" colSpan={7}>No employees yet.</td></tr>
+              <tr><td className="mut" colSpan={6}>No employees yet.</td></tr>
             )}
             {rows.map((e) => (
               <tr key={e.id}>
                 <td>
-                  <span className="av">{initials(e.full_name)}</span>
-                  {e.full_name}
-                  <div className="fig" style={{ marginLeft: 38 }}>{e.employee_code} · {e.username}</div>
-                </td>
-                <td>{e.position}</td>
-                <td>{shifts[e.shift_id] ?? e.shift_id}</td>
-                <td>
-                  <select
-                    value={e.worker_type}
-                    aria-label={`Worker type for ${e.full_name}`}
-                    style={{ width: "auto", padding: "6px 10px", fontSize: 13 }}
-                    onChange={(ev) => run(() => setWorkerType(e.id, ev.target.value))}
-                  >
-                    <option>Employee</option>
-                    <option>Independent contractor</option>
-                  </select>
+                  <div className="who">
+                    <span className="av" style={{ flex: "none" }}>{initials(e.full_name)}</span>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 600 }}>{e.full_name}</div>
+                      <div className="sub" title={`${e.employee_code} · ${e.username}`}>{e.employee_code} · {e.username}</div>
+                    </div>
+                  </div>
                 </td>
                 <td>
+                  <div>{e.position}</div>
+                  <div className="sub">{shifts[e.shift_id] ?? e.shift_id}</div>
+                </td>
+                <td className="hide-sm">
+                  <span>{e.worker_type}</span>
+                </td>
+                <td className="nw">
                   {e.profile_complete ? <span className="tag ok">Active</span> : <span className="tag wait">Pending profile</span>}
                 </td>
-                <td>{fmtDate(e.hired_on)}</td>
-                <td>
-                  <div className="acts">
+                <td className="nw hide-sm">{fmtDate(e.hired_on)}</td>
+                <td className="end">
+                  <div style={{ display: "inline-flex", gap: 8, alignItems: "center", position: "relative", zIndex: menu === e.id ? 25 : 1 }}>
                     <button className="sm" onClick={() => setProfile(e)}>Profile</button>
-                    {!e.profile_complete && (
-                      <button
-                        className="sm"
-                        onClick={() =>
-                          start(async () => {
-                            const r = await resetTempPassword(e.id);
-                            if ("error" in r) setMsg(r.error);
-                            else { setMsg(""); setCreds(r.creds); }
-                          })
-                        }
-                      >
-                        New temp password
-                      </button>
+                    <button
+                      className="sm"
+                      aria-label={`More actions for ${e.full_name}`}
+                      aria-haspopup="menu"
+                      aria-expanded={menu === e.id}
+                      onClick={() => setMenu(menu === e.id ? null : e.id)}
+                    >
+                      •••
+                    </button>
+                    {menu === e.id && (
+                      <div className="pop" role="menu">
+                        {!e.profile_complete && (
+                          <button
+                            role="menuitem"
+                            onClick={() => {
+                              setMenu(null);
+                              start(async () => {
+                                const r = await resetTempPassword(e.id);
+                                if ("error" in r) setMsg(r.error);
+                                else { setMsg(""); setCreds(r.creds); }
+                              });
+                            }}
+                          >
+                            New temp password
+                          </button>
+                        )}
+                        <button role="menuitem" className="bad" onClick={() => { setMenu(null); setConfirm(e); }}>
+                          Remove employee
+                        </button>
+                      </div>
                     )}
-                    <button className="sm dngr" onClick={() => setConfirm(e)}>Remove</button>
                   </div>
                 </td>
               </tr>
@@ -289,9 +424,14 @@ export function EmployeeTable({ rows, shifts }: { rows: Row[]; shifts: Record<st
               Personal details stay empty until the employee completes their profile on first sign-in.
             </p>
           )}
-          <div className="mact"><button onClick={() => setProfile(null)}>Close</button></div>
+          <div className="mact">
+            <button onClick={() => setProfile(null)}>Close</button>
+            <button className="pri" onClick={() => { setEditing(profile); setProfile(null); }}>{"Edit information"}</button>
+          </div>
         </Modal>
       )}
+
+      {editing && <EditEmployeeModal key={editing.id} e={editing} shifts={shifts} onClose={() => setEditing(null)} />}
 
       {confirm && (
         <Modal>
