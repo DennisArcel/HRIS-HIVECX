@@ -1,5 +1,5 @@
 "use client";
-import { FormEvent, useState, useTransition } from "react";
+import { FormEvent, useEffect, useState, useTransition } from "react";
 import { Modal } from "@/components/ui";
 import { fmtDate, initials, type Creds, type Row } from "@/lib/fmt";
 import { PHP, hourlyRate } from "@/lib/payroll-calc";
@@ -57,6 +57,7 @@ export function CreateEmployeeForm() {
   const [email, setEmail] = useState("");
   const [touched, setTouched] = useState({ user: false, email: false });
   const [pw, setPw] = useState("");
+  const [open, setOpen] = useState(false);
 
   function onName(v: string) {
     setName(v);
@@ -72,6 +73,7 @@ export function CreateEmployeeForm() {
     start(async () => {
       const r = await createEmployee(fd);
       if ("error" in r) return setErr(r.error);
+      setOpen(false);
       setCreated(r.creds);
       setName("");
       setUser("");
@@ -83,8 +85,22 @@ export function CreateEmployeeForm() {
   }
 
   return (
-    <div className="card">
-      <h3>Create employee account</h3>
+    <>
+      <button className="pri" type="button" onClick={() => { setErr(""); setOpen(true); }}>
+        Create employee account
+      </button>
+      {open && (
+      <Modal onClose={() => setOpen(false)}>
+      <style>{`
+        /* widen the modal card that directly wraps this form */
+        *:has(> .cef-wrap){width:min(1040px,94vw)!important;max-width:min(1040px,94vw)!important;padding:34px 38px!important;max-height:92vh;overflow-y:auto}
+        .cef-wrap h3{font-size:22px}
+        .cef-wrap label{font-size:13.5px}
+        .cef-wrap input,.cef-wrap select{padding-top:14px;padding-bottom:14px;font-size:15px}
+      `}</style>
+      <div className="cef-wrap">
+      <div className="fig">NEW EMPLOYEE</div>
+      <h3 style={{ margin: "6px 0 4px" }}>Create employee account</h3>
       <p className="mut" style={{ fontSize: 13, margin: 0 }}>
         Enter only what HR knows. The employee adds their birthday, contact number, address and emergency contact on
         first sign-in, and replaces the temporary password.
@@ -124,7 +140,7 @@ export function CreateEmployeeForm() {
           <input id="aeR" name="r" required />
         </div>
         <div>
-          <label htmlFor="aeS">Monthly salary (₱ per month) <span className="req">*</span></label>
+          <label htmlFor="aeS">Monthly salary (₱) <span className="req">*</span></label>
           <input id="aeS" name="s" type="number" min="0" required />
         </div>
         <div>
@@ -155,7 +171,7 @@ export function CreateEmployeeForm() {
           <label htmlFor="aeW">Temporary password <span className="req">*</span></label>
           <div className="pw">
             <input
-              id="aeW" name="pw" required autoComplete="off" placeholder="Type one, or click Generate" value={pw} onChange={(e) => setPw(e.target.value)}
+              id="aeW" name="pw" required autoComplete="off" placeholder="Type Default Password or Generate Password" value={pw} onChange={(e) => setPw(e.target.value)}
               style={{ paddingRight: 96, fontFamily: "ui-monospace,Menlo,monospace" }}
             />
             <button type="button" onClick={() => setPw(genTemp())}>Generate</button>
@@ -165,14 +181,18 @@ export function CreateEmployeeForm() {
           The employee signs in with the username and this temporary password, then completes their profile and sets
           their own password.
         </div>
-        <div>
-          <button className="pri wide" type="submit" disabled={pending}>
+        <div className="full mact" style={{ margin: 0 }}>
+          <button type="button" onClick={() => setOpen(false)}>Cancel</button>
+          <button className="pri" type="submit" disabled={pending}>
             {pending ? "Creating…" : "Create account"}
           </button>
         </div>
       </form>
+      </div>
+      </Modal>
+      )}
       {created && <CredsModal c={created} created onClose={() => setCreated(null)} />}
-    </div>
+    </>
   );
 }
 
@@ -226,7 +246,7 @@ function EditEmployeeModal({ e, shifts, onClose }: { e: Row; shifts: Record<stri
           <input id="eeR" name="r" required defaultValue={e.position ?? ""} />
         </div>
         <div>
-          <label htmlFor="eeS">Monthly salary (₱ per month) <span className="req">*</span></label>
+          <label htmlFor="eeS">Monthly salary (₱) <span className="req">*</span></label>
           <input id="eeS" name="s" type="number" min="0" step="any" required defaultValue={salary || ""} />
         </div>
         <div>
@@ -281,6 +301,19 @@ export function EmployeeTable({ rows, shifts }: { rows: Row[]; shifts: Record<st
   const [creds, setCreds] = useState<Creds | null>(null);
   const [msg, setMsg] = useState("");
   const [menu, setMenu] = useState<string | null>(null); // which row's "more" menu is open
+  const [menuPos, setMenuPos] = useState<{ top?: number; bottom?: number; right: number }>({ right: 0 });
+
+  // the menu is position:fixed, so close it if the page scrolls or resizes (it would drift from its button)
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [menu]);
 
   const run = (fn: () => Promise<{ error?: string }>) =>
     start(async () => {
@@ -360,12 +393,18 @@ export function EmployeeTable({ rows, shifts }: { rows: Row[]; shifts: Record<st
                       aria-label={`More actions for ${e.full_name}`}
                       aria-haspopup="menu"
                       aria-expanded={menu === e.id}
-                      onClick={() => setMenu(menu === e.id ? null : e.id)}
+                      onClick={(ev) => {
+                        const r = ev.currentTarget.getBoundingClientRect();
+                        const right = window.innerWidth - r.right;
+                        // open downward, or upward when there isn't room below
+                        setMenuPos(window.innerHeight - r.bottom < 140 ? { bottom: window.innerHeight - r.top + 6, right } : { top: r.bottom + 6, right });
+                        setMenu(menu === e.id ? null : e.id);
+                      }}
                     >
                       •••
                     </button>
                     {menu === e.id && (
-                      <div className="pop" role="menu">
+                      <div className="pop" role="menu" style={{ position: "fixed", top: "auto", bottom: "auto", ...menuPos }}>
                         {!e.profile_complete && (
                           <button
                             role="menuitem"
