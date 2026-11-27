@@ -3,8 +3,7 @@ import { FormEvent, useEffect, useState, useTransition } from "react";
 import { Modal } from "@/components/ui";
 import { fmtDate, initials, type Creds, type Row } from "@/lib/fmt";
 import { PHP, hourlyRate } from "@/lib/payroll-calc";
-import { sendMessage } from "./messages";
-import { createEmployee, removeEmployee, resetTempPassword } from "./manage";
+import { createEmployee, removeEmployee, resetTempPassword, updateEmployee } from "./manage";
 
 const genTemp = () => {
   const c = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
@@ -49,7 +48,7 @@ function CredsModal({ c, created, onClose }: { c: Creds; created: boolean; onClo
   );
 }
 
-export function CreateEmployeeForm({ nextCode }: { nextCode: string }) {
+export function CreateEmployeeForm() {
   const [pending, start] = useTransition();
   const [err, setErr] = useState("");
   const [created, setCreated] = useState<Creds | null>(null);
@@ -114,11 +113,8 @@ export function CreateEmployeeForm({ nextCode }: { nextCode: string }) {
         )}
 
         <div>
-          <label htmlFor="aeC">Employee ID <span className="mut">(automatic)</span></label>
-          <input
-            id="aeC" value={nextCode} readOnly tabIndex={-1} aria-readonly="true" autoComplete="off"
-            style={{ fontFamily: "ui-monospace,Menlo,monospace", cursor: "default" }}
-          />
+          <label htmlFor="aeC">Employee ID <span className="req">*</span></label>
+          <input id="aeC" name="code" required autoComplete="off" placeholder="e.g. HV-001" />
         </div>
         <div>
           <label htmlFor="aeN">Full name <span className="req">*</span></label>
@@ -200,26 +196,28 @@ export function CreateEmployeeForm({ nextCode }: { nextCode: string }) {
   );
 }
 
-function MessageModal({ to, onClose }: { to: Row; onClose: () => void }) {
+type SalaryRow = Row & { salary_monthly?: number | string | null };
+
+/** Admin-only edit form for one employee. Worker type is shown but locked: it is set when the account is created. */
+function EditEmployeeModal({ e, shifts, onClose }: { e: Row; shifts: Record<string, string>; onClose: () => void }) {
   const [pending, start] = useTransition();
   const [err, setErr] = useState("");
-  const [sent, setSent] = useState("");
+  const [ss, se] = (shifts[e.shift_id] ?? "09:00–18:00").split("–");
+  const salary = Number((e as SalaryRow).salary_monthly ?? 0);
 
-  function onSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const fd = new FormData(e.currentTarget);
-    fd.set("to", to.id);
+  function onSubmit(ev: FormEvent<HTMLFormElement>) {
+    ev.preventDefault();
+    const fd = new FormData(ev.currentTarget);
     setErr("");
     start(async () => {
-      const r = await sendMessage(fd);
-      if ("error" in r) return setErr(r.error);
-      setSent(`Message sent to ${to.full_name}.`);
+      const r = await updateEmployee(e.id, fd);
+      if (r.error) return setErr(r.error);
+      onClose();
     });
   }
 
   return (
     <Modal onClose={onClose}>
-<<<<<<< HEAD
       <div className="fig">EDIT EMPLOYEE</div>
       <h3 style={{ margin: "6px 0 4px" }}>{e.full_name}</h3>
       <p className="mut" style={{ fontSize: 13, margin: 0 }}>
@@ -291,29 +289,6 @@ function MessageModal({ to, onClose }: { to: Row; onClose: () => void }) {
           <button className="pri" type="submit" disabled={pending}>{pending ? "Saving…" : "Save changes"}</button>
         </div>
       </form>
-=======
-      <div className="fig">MESSAGE</div>
-      <h3 style={{ margin: "6px 0 10px" }}>To: {to.full_name}</h3>
-      {sent ? (
-        <>
-          <p>{sent}</p>
-          <div className="mact"><button className="pri" type="button" onClick={onClose}>Done</button></div>
-        </>
-      ) : (
-        <form onSubmit={onSubmit} noValidate>
-          {err && <p className="err-box"><span>{err}</span></p>}
-          <label htmlFor="msT">Subject <span className="req">*</span></label>
-          <input id="msT" name="title" required maxLength={80} autoComplete="off" />
-          <label htmlFor="msB" style={{ marginTop: 10, display: "block" }}>Message <span className="req">*</span></label>
-          <textarea id="msB" name="body" required maxLength={1000} rows={5} style={{ width: "100%" }} />
-          <p className="mut" style={{ fontSize: 12.5 }}>It appears in the notification bell on the employee&apos;s portal.</p>
-          <div className="mact">
-            <button type="button" onClick={onClose}>Cancel</button>
-            <button className="pri" type="submit" disabled={pending}>{pending ? "Sending…" : "Send"}</button>
-          </div>
-        </form>
-      )}
->>>>>>> 3e49294 (Hourly pay, shift fields on employee form, icon fixes)
     </Modal>
   );
 }
@@ -321,10 +296,10 @@ function MessageModal({ to, onClose }: { to: Row; onClose: () => void }) {
 export function EmployeeTable({ rows, shifts }: { rows: Row[]; shifts: Record<string, string> }) {
   const [pending, start] = useTransition();
   const [profile, setProfile] = useState<Row | null>(null);
+  const [editing, setEditing] = useState<Row | null>(null);
   const [confirm, setConfirm] = useState<Row | null>(null);
   const [creds, setCreds] = useState<Creds | null>(null);
   const [msg, setMsg] = useState("");
-<<<<<<< HEAD
   const [menu, setMenu] = useState<string | null>(null); // which row's "more" menu is open
   const [menuPos, setMenuPos] = useState<{ top?: number; bottom?: number; right: number }>({ right: 0 });
 
@@ -339,9 +314,6 @@ export function EmployeeTable({ rows, shifts }: { rows: Row[]; shifts: Record<st
       window.removeEventListener("resize", close);
     };
   }, [menu]);
-=======
-  const [msgTo, setMsgTo] = useState<Row | null>(null);
->>>>>>> 3e49294 (Hourly pay, shift fields on employee form, icon fixes)
 
   const run = (fn: () => Promise<{ error?: string }>) =>
     start(async () => {
@@ -356,39 +328,66 @@ export function EmployeeTable({ rows, shifts }: { rows: Row[]; shifts: Record<st
           <span>{msg}</span>
         </p>
       )}
-      <div className="card flat wrap" style={{ padding: 8, opacity: pending ? 0.7 : 1 }}>
-        <table>
+      <style>{`
+        .emptbl{width:100%;border-collapse:collapse}
+        .emptbl th{white-space:nowrap;text-align:left;padding:14px 18px;font-weight:500}
+        .emptbl td{padding:18px;vertical-align:middle;border-top:1px solid var(--line, #2a2a2a)}
+        .emptbl tr:first-child td{border-top:0}
+        .emptbl .who{display:flex;align-items:center;gap:14px;min-width:230px}
+        .emptbl .sub{color:var(--mut, #9a9a9a);font-size:12.5px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:210px}
+        .emptbl .nw{white-space:nowrap}
+        .emptbl select.quiet{width:auto;padding:7px 12px;font-size:13px;background:transparent}
+        .emptbl .end{text-align:right;white-space:nowrap}
+        .emptbl .pop{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:190px;padding:6px;border-radius:12px;
+          background:var(--panel, #181818);border:1px solid var(--line, #2a2a2a);box-shadow:0 12px 32px rgba(0,0,0,.35);text-align:left}
+        .emptbl .pop button{display:block;width:100%;text-align:left;border:0;background:transparent;color:var(--tx, inherit);
+          padding:10px 12px;border-radius:8px;font:inherit;font-size:13.5px;cursor:pointer}
+        .emptbl .pop button:hover{background:rgba(255,255,255,.06)}
+        .emptbl .pop button.bad{color:var(--bad, #ff6b6b)}
+        @media (max-width: 900px){ .emptbl .hide-sm{display:none} }
+      `}</style>
+      {menu && <div onClick={() => setMenu(null)} style={{ position: "fixed", inset: 0, zIndex: 20 }} />}
+      <div className="card flat wrap" style={{ padding: 8, opacity: pending ? 0.7 : 1, overflowX: "auto" }}>
+        <table className="emptbl">
           <thead>
             <tr>
-              {["Employee", "Position", "Shift", "Worker type", "Account", "Hired", ""].map((h) => (
-                <th key={h}>{h}</th>
-              ))}
+              <th>Employee</th>
+              <th>Position</th>
+              <th className="hide-sm">Worker type</th>
+              <th>Status</th>
+              <th className="hide-sm">Hired</th>
+              <th />
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td className="mut" colSpan={7}>No employees yet.</td></tr>
+              <tr><td className="mut" colSpan={6}>No employees yet.</td></tr>
             )}
             {rows.map((e) => (
               <tr key={e.id}>
                 <td>
-                  <span className="av">{initials(e.full_name)}</span>
-                  {e.full_name}
-                  <div className="fig" style={{ marginLeft: 38 }}>{e.employee_code} · {e.username}</div>
+                  <div className="who">
+                    <span className="av" style={{ flex: "none" }}>{initials(e.full_name)}</span>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 600 }}>{e.full_name}</div>
+                      <div className="sub" title={`${e.employee_code} · ${e.username}`}>{e.employee_code} · {e.username}</div>
+                    </div>
+                  </div>
                 </td>
-                <td>{e.position}</td>
-                <td>{shifts[e.shift_id] ?? e.shift_id}</td>
                 <td>
-                  {e.worker_type}
+                  <div>{e.position}</div>
+                  <div className="sub">{shifts[e.shift_id] ?? e.shift_id}</div>
                 </td>
-                <td>
+                <td className="hide-sm">
+                  <span>{e.worker_type}</span>
+                </td>
+                <td className="nw">
                   {e.profile_complete ? <span className="tag ok">Active</span> : <span className="tag wait">Pending profile</span>}
                 </td>
-                <td>{fmtDate(e.hired_on)}</td>
-                <td>
-                  <div className="acts">
+                <td className="nw hide-sm">{fmtDate(e.hired_on)}</td>
+                <td className="end">
+                  <div style={{ display: "inline-flex", gap: 8, alignItems: "center", position: "relative", zIndex: menu === e.id ? 25 : 1 }}>
                     <button className="sm" onClick={() => setProfile(e)}>Profile</button>
-<<<<<<< HEAD
                     <button
                       className="sm"
                       aria-label={`More actions for ${e.full_name}`}
@@ -425,24 +424,7 @@ export function EmployeeTable({ rows, shifts }: { rows: Row[]; shifts: Record<st
                           Remove employee
                         </button>
                       </div>
-=======
-                    <button className="sm" onClick={() => setMsgTo(e)}>Message</button>
-                    {!e.profile_complete && (
-                      <button
-                        className="sm"
-                        onClick={() =>
-                          start(async () => {
-                            const r = await resetTempPassword(e.id);
-                            if ("error" in r) setMsg(r.error);
-                            else { setMsg(""); setCreds(r.creds); }
-                          })
-                        }
-                      >
-                        New temp password
-                      </button>
->>>>>>> 3e49294 (Hourly pay, shift fields on employee form, icon fixes)
                     )}
-                    <button className="sm dngr" onClick={() => setConfirm(e)}>Remove</button>
                   </div>
                 </td>
               </tr>
@@ -481,9 +463,14 @@ export function EmployeeTable({ rows, shifts }: { rows: Row[]; shifts: Record<st
               Personal details stay empty until the employee completes their profile on first sign-in.
             </p>
           )}
-          <div className="mact"><button onClick={() => setProfile(null)}>Close</button></div>
+          <div className="mact">
+            <button onClick={() => setProfile(null)}>Close</button>
+            <button className="pri" onClick={() => { setEditing(profile); setProfile(null); }}>{"Edit information"}</button>
+          </div>
         </Modal>
       )}
+
+      {editing && <EditEmployeeModal key={editing.id} e={editing} shifts={shifts} onClose={() => setEditing(null)} />}
 
       {confirm && (
         <Modal>
@@ -499,8 +486,6 @@ export function EmployeeTable({ rows, shifts }: { rows: Row[]; shifts: Record<st
           </div>
         </Modal>
       )}
-
-      {msgTo && <MessageModal to={msgTo} onClose={() => setMsgTo(null)} />}
 
       {creds && <CredsModal c={creds} created={false} onClose={() => setCreds(null)} />}
     </>
