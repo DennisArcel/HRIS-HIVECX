@@ -1,7 +1,6 @@
 "use client";
 import Link from "next/link";
 import { useState } from "react";
-import { Icon } from "./Icon";
 
 export type DayRow = { name: string; shift: string; tin: string | null; tout: string | null; label: string; cls: string };
 export type DayFix = { name: string; type: string; requested: string | null; status: string; remarks: string | null };
@@ -19,6 +18,11 @@ const LEGEND: [string, string][] = [
   ["var(--ok)", "All on time"], ["var(--warn)", "Has lates"], ["var(--bad)", "Has absences"], ["var(--mut)", "Rest day"],
   ["var(--info)", "Holiday"], ["var(--inc)", "Incomplete"], ["var(--leave)", "On leave"],
 ];
+const Chev = ({ dir }: { dir: "l" | "r" }) => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <polyline points={dir === "l" ? "15 5 8 12 15 19" : "9 5 16 12 9 19"} />
+  </svg>
+);
 const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const longDate = (k: string) =>
   new Date(k + "T00:00:00").toLocaleDateString("en-PH", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
@@ -61,9 +65,9 @@ export default function AdminAttendanceCalendar({
       <div className="calhd"><div><div className="fig">ATTENDANCE CALENDAR</div><h3>{monthTitle}</h3></div></div>
 
       <div className="calnav" style={{ marginBottom: 10 }}>
-        {prev ? <Link href={prev} aria-label="Previous month" className="ib"><Icon name="cl" /></Link> : <button disabled aria-label="Previous month"><Icon name="cl" /></button>}
+        {prev ? <Link href={prev} aria-label="Previous month" className="ib"><Chev dir="l" /></Link> : <button disabled aria-label="Previous month"><Chev dir="l" /></button>}
         <Link href={todayHref} className="sm">Today</Link>
-        {next ? <Link href={next} aria-label="Next month" className="ib"><Icon name="cr" /></Link> : <button disabled aria-label="Next month"><Icon name="cr" /></button>}
+        {next ? <Link href={next} aria-label="Next month" className="ib"><Chev dir="r" /></Link> : <button disabled aria-label="Next month"><Chev dir="r" /></button>}
       </div>
 
       <div className="cal">

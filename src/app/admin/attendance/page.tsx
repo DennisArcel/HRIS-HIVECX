@@ -1,6 +1,7 @@
 import { supabaseServer } from "@/lib/supabase/server";
 import { Decision } from "@/components/Decision";
 import AdminAttendanceCalendar, { type DayData } from "@/components/AdminAttendanceCalendar";
+import AuditTrailButton, { type AuditEntry } from "@/components/AuditTrailButton";
 import { fmtDate, initials } from "@/lib/fmt";
 import { decideFix, decideReq } from "./actions";
 
@@ -14,13 +15,6 @@ const mins = (t: string) => {
   return h * 60 + m;
 };
 const pad2 = (n: number) => String(n).padStart(2, "0");
-const ago = (iso: string) => {
-  const s = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (s < 60) return "just now";
-  if (s < 3600) return Math.floor(s / 60) + " min ago";
-  if (s < 86400) return Math.floor(s / 3600) + " h ago";
-  return Math.floor(s / 86400) + " d ago";
-};
 const statusTag = (s: string) => <span className={"tag " + (s === "Approved" ? "ok" : s === "Rejected" ? "bad" : "wait")}>{s}</span>;
 const Dash = () => <span className="mut">—</span>;
 
@@ -61,7 +55,12 @@ export default async function AttendancePage({ searchParams }: { searchParams: P
       .select("id, work_date, type, requested_time, reason, status, hr_remarks, created_at, profiles!employee_id(full_name)")
       .order("created_at", { ascending: false }),
     sb.from("hr_requests").select("id, type, request_date, status, profiles!employee_id(full_name)").order("id", { ascending: false }),
-    sb.from("audit_log").select("action, detail, actor_name, created_at").order("created_at", { ascending: false }).limit(8),
+    sb
+      .from("audit_log")
+      .select("action, detail, actor_name, created_at")
+      .in("action", ["Attendance corrected", "Correction rejected", "Request approved", "Request rejected"])
+      .order("created_at", { ascending: false })
+      .limit(200),
     // ---- month data for the calendar ----
     sb.from("attendance").select("employee_id, work_date, time_in, time_out").gte("work_date", first).lte("work_date", last).limit(5000),
     sb.from("leave_requests").select("employee_id, from_date, to_date").eq("status", "Approved").lte("from_date", last).gte("to_date", first),
@@ -159,15 +158,23 @@ export default async function AttendancePage({ searchParams }: { searchParams: P
 
   const fixList = [...(fixes.data ?? [])].sort((a, b) => (a.status === "Pending" ? -1 : 0) - (b.status === "Pending" ? -1 : 0));
   const pendFix = fixList.filter((f) => f.status === "Pending").length;
+  const auditEntries: AuditEntry[] = (audit.data ?? []).map((a) => ({
+    action: a.action, detail: a.detail, actor: a.actor_name, at: a.created_at,
+  }));
 
   return (
     <>
-      <div className="eyebrow">HR Admin / Attendance</div>
-      <h1>
-        Today&apos;s shift,
-        <br />
-        <em>every employee.</em>
-      </h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+        <div>
+          <div className="eyebrow">HR Admin / Attendance</div>
+          <h1>
+            Today&apos;s shift,
+            <br />
+            <em>every employee.</em>
+          </h1>
+        </div>
+        <AuditTrailButton entries={auditEntries} />
+      </div>
       <p className="lead">Spot lates and absences, then clear correction requests. Every change is logged.</p>
 
       <div className="card flat wrap" style={{ padding: 8 }}>
@@ -255,17 +262,6 @@ export default async function AttendancePage({ searchParams }: { searchParams: P
             </tbody>
           </table>
         </div>
-      </div>
-
-      <div className="card mt">
-        <div className="cardhd"><div><div className="fig">AUDIT TRAIL</div><h3>Change history</h3></div></div>
-        {(audit.data ?? []).length === 0 && <p className="mut">No changes recorded yet. Approvals and corrections appear here.</p>}
-        {(audit.data ?? []).map((a, i) => (
-          <div className="ls" key={i}>
-            <b>{a.action}</b> <span className="mut">· {ago(a.created_at)} · {a.actor_name}</span>
-            <br /><span className="mut" style={{ fontSize: 13 }}>{a.detail}</span>
-          </div>
-        ))}
       </div>
     </>
   );
