@@ -11,6 +11,7 @@ export const EMPLOYEE_NAV = [
   { href: "/employee/attendance", label: "Attendance", icon: "cal" },
   { href: "/employee/leave", label: "Leave", icon: "plane" },
   { href: "/employee/payslips", label: "Payslips", icon: "wallet" },
+  { href: "/employee/messages", label: "Messages", icon: "msg" },
   { href: "/employee/profile", label: "My Profile", icon: "user" },
 ];
 const NOTI_ICON: Record<string, string> = { announcement: "mega", leave: "plane", correction: "cal", payslip: "wallet", bonus: "zap", hr: "info", payroll: "wallet" };
@@ -39,7 +40,8 @@ export function SideNav({ name, role }: { name: string; role: string }) {
           <span className="av">{name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()}</span>
           <span><b>{name}</b><span>{role}</span></span>
         </div>
-<button className="ni" suppressHydrationWarning disabled={pending} onClick={() => start(() => signOut())}>          <Icon name="out" /><span>{pending ? "Signing out…" : "Sign out"}</span>
+        <button className="ni" suppressHydrationWarning disabled={pending} onClick={() => start(() => signOut())}>
+          <Icon name="out" /><span>{pending ? "Signing out…" : "Sign out"}</span>
         </button>
       </div>
     </>

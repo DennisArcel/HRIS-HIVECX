@@ -2,6 +2,7 @@ const LEFT = '<path d="M14.5 5.5 8 12l6.5 6.5"/>';
 const RIGHT = '<path d="M9.5 5.5 16 12l-6.5 6.5"/>';
 const BELL = '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 21a2 2 0 0 0 4 0"/>';
 const USER = '<circle cx="12" cy="8.5" r="3.8"/><path d="M4.5 20c1.3-3.6 4-5.3 7.5-5.3s6.2 1.7 7.5 5.3"/>';
+const MSG = '<path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H10l-4.5 4v-4H5.5A1.5 1.5 0 0 1 4 14.5z"/>';
 const X = '<path d="M6 6l12 12M18 6 6 18"/>';
 
 const IP: Record<string, string> = {
@@ -19,12 +20,18 @@ const IP: Record<string, string> = {
   moon: '<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5 5l1.8 1.8M17.2 17.2 19 19M19 5l-1.8 1.8M6.8 17.2 5 19"/>',
 
+  msg: MSG, message: MSG, messages: MSG, chat: MSG,
+  zap: '<path d="M13 3 5 13.5h6L10 21l8-10.5h-6z"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.8v.2"/>',
+
   /* added: month arrows, notification bell, profile, close (with common aliases) */
   left: LEFT, prev: LEFT, chevl: LEFT, "chevron-left": LEFT, "arrow-left": LEFT,
   right: RIGHT, next: RIGHT, chevr: RIGHT, "chevron-right": RIGHT, "arrow-right": RIGHT,
   bell: BELL, notif: BELL, notifications: BELL, notification: BELL,
   user: USER, profile: USER,
   x: X, close: X,
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
+  send: '<path d="M21 3 10 14"/><path d="m21 3-7 18-4-7-7-4z"/>',
 };
 
 export function Icon({ name }: { name: string }) {

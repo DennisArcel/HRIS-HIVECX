@@ -1,25 +1,29 @@
 import { supabaseServer } from "@/lib/supabase/server";
 import { CreateEmployeeForm, EmployeeTable } from "./EmployeeTools";
 import type { Row } from "@/lib/fmt";
+import { nextEmployeeCode } from "@/lib/employee-code";
 
 export const dynamic = "force-dynamic";
 
 export default async function EmployeesPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   const { q = "" } = await searchParams;
   const sb = await supabaseServer();
-  const { data } = await sb
+  const { data, error } = await sb
     .from("profiles")
     .select(
       "id, employee_code, full_name, username, email, position, department, worker_type, profile_complete, hired_on, salary_semi, salary_monthly, birthday, phone, address, emergency_contact, shift_id, employment_status",
     )
     .eq("role", "employee")
     .order("employee_code");
+  if (error) console.error("[employees page] profiles query failed:", error);
 
   // shift id → "09:00–18:00", for the Shift column and the profile window
   const { data: sh } = await sb.from("shifts").select("id, start_time, end_time");
   const shifts: Record<string, string> = Object.fromEntries(
     (sh ?? []).map((s) => [s.id as string, `${String(s.start_time).slice(0, 5)}–${String(s.end_time).slice(0, 5)}`]),
   );
+
+  const nextCode = await nextEmployeeCode();
 
   const all = (data ?? []) as Row[];
   const needle = q.trim().toLowerCase();
@@ -43,7 +47,13 @@ export default async function EmployeesPage({ searchParams }: { searchParams: Pr
         login.
       </p>
 
-      <CreateEmployeeForm />
+      <CreateEmployeeForm nextCode={nextCode} />
+
+      {error && (
+        <p className="err-box" style={{ marginTop: 16 }}>
+          <span>Couldn&apos;t load the employee list: {error.message}</span>
+        </p>
+      )}
 
       <form method="get" className="row mt" style={{ alignItems: "center" }}>
         <input

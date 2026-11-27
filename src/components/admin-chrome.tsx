@@ -11,6 +11,7 @@ export const ADMIN_NAV = [
   { href: "/admin/leave", label: "Leave", icon: "plane" },
   { href: "/admin/payroll", label: "Payroll", icon: "wallet" },
   { href: "/admin/announcements", label: "Announcements", icon: "mega" },
+  { href: "/admin/messages", label: "Messages", icon: "msg" },
   { href: "/admin/reports", label: "Reports", icon: "chart" },
   { href: "/admin/scan", label: "Scan QR", icon: "qr" },
   { href: "/admin/qr", label: "QR Badges", icon: "qr" },

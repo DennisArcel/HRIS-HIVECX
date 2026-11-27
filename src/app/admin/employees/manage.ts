@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { randomInt } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { requireAdmin } from "@/lib/auth";
+import { nextEmployeeCode } from "@/lib/employee-code";
 import type { Creds } from "@/lib/fmt";
 
 type Result = { error: string } | { ok: true; creds: Creds };
@@ -29,6 +30,9 @@ const schema = z.object({
   se: z.string().regex(/^\d{2}:\d{2}$/, "Choose the time the shift ends."),
   pw: z.string().min(6, "Enter a temporary password (at least 6 characters) or click Generate."),
 });
+
+// New accounts get their Employee ID automatically, so the create form has no "code" field.
+const createSchema = schema.omit({ code: true });
 
 const CHARS = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
 const genTemp = () => Array.from({ length: 10 }, () => CHARS[randomInt(CHARS.length)]).join("");
@@ -59,15 +63,10 @@ async function audit(admin: { id: string; name: string }, action: string, detail
 
 export async function createEmployee(fd: FormData): Promise<Result> {
   const admin = await requireAdmin();
-  const parsed = schema.safeParse(Object.fromEntries(fd));
+  const parsed = createSchema.safeParse(Object.fromEntries(fd));
   if (!parsed.success) return { error: parsed.error.issues[0].message };
   const v = parsed.data;
   const db = supabaseAdmin();
-
-  // Employee ID is typed in by HR
-  const code = v.code;
-  const { data: dupe } = await db.from("profiles").select("id").eq("employee_code", code).maybeSingle();
-  if (dupe) return { error: "That Employee ID is already assigned to another employee." };
 
   // shift: starts at / ends at
   const len = toMin(v.se) - toMin(v.ss);
@@ -92,27 +91,36 @@ export async function createEmployee(fd: FormData): Promise<Result> {
     };
   }
 
-  const { error: profErr } = await db.from("profiles").insert({
-    id: created.user.id,
-    employee_code: code,
-    full_name: v.n,
-    username: v.user,
-    email: v.email,
-    role: "employee",
-    position: v.r,
-    salary_monthly: v.s, // HR enters the monthly salary. Hourly rate = monthly ÷ 20 days ÷ 8 hrs
-    worker_type: v.ty,
-    hired_on: v.j,
-    shift_id: shift.id,
-    profile_complete: false,
-  });
+  // Assign the next free Employee ID. If two accounts are created at the same moment and collide,
+  // the unique constraint rejects one of them and we simply pick the next free number and retry.
+  let code = "";
+  let profErr: { code?: string; message: string } | null = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    code = await nextEmployeeCode();
+    const { error } = await db.from("profiles").insert({
+      id: created.user.id,
+      employee_code: code,
+      full_name: v.n,
+      username: v.user,
+      email: v.email,
+      role: "employee",
+      position: v.r,
+      salary_monthly: v.s, // HR enters the monthly salary. Hourly rate = monthly ÷ 20 days ÷ 8 hrs
+      worker_type: v.ty,
+      hired_on: v.j,
+      shift_id: shift.id,
+      profile_complete: false,
+    });
+    profErr = error;
+    if (!error || !(error.code === "23505" && /employee_code/.test(error.message))) break;
+  }
   if (profErr) {
     await db.auth.admin.deleteUser(created.user.id); // roll back so the email isn't left half-registered
     return {
       error:
         profErr.code === "23505"
           ? /employee_code/.test(profErr.message)
-            ? "That Employee ID is already assigned to another employee."
+            ? "Couldn't assign an Employee ID. Please try again."
             : "That username is already used. Pick another one."
           : "Couldn't save the profile: " + profErr.message,
     };
