@@ -1,5 +1,6 @@
 import { supabaseServer } from "@/lib/supabase/server";
 import { Decision } from "@/components/Decision";
+import AdminAttendanceCalendar, { type DayData } from "@/components/AdminAttendanceCalendar";
 import { fmtDate, initials } from "@/lib/fmt";
 import { decideFix, decideReq } from "./actions";
 
@@ -12,6 +13,7 @@ const mins = (t: string) => {
   const [h, m] = t.split(":").map(Number);
   return h * 60 + m;
 };
+const pad2 = (n: number) => String(n).padStart(2, "0");
 const ago = (iso: string) => {
   const s = (Date.now() - new Date(iso).getTime()) / 1000;
   if (s < 60) return "just now";
@@ -22,7 +24,8 @@ const ago = (iso: string) => {
 const statusTag = (s: string) => <span className={"tag " + (s === "Approved" ? "ok" : s === "Rejected" ? "bad" : "wait")}>{s}</span>;
 const Dash = () => <span className="mut">—</span>;
 
-export default async function AttendancePage() {
+export default async function AttendancePage({ searchParams }: { searchParams: Promise<{ m?: string }> }) {
+  const sp = await searchParams;
   const sb = await supabaseServer();
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
   const nowM = mins(
@@ -30,7 +33,24 @@ export default async function AttendancePage() {
   );
   const dow = new Date(today + "T00:00:00").getDay();
 
-  const [emps, shifts, att, leaves, hol, fixes, reqs, audit] = await Promise.all([
+  // ---- month selected for the calendar ----
+  const cur = today.slice(0, 7);
+  let ym = /^\d{4}-\d{2}$/.test(sp?.m ?? "") ? sp.m! : cur;
+  if (ym > cur) ym = cur;
+  const [y, mo] = ym.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  const lead = new Date(Date.UTC(y, mo - 1, 1)).getUTCDay();
+  const shiftYm = (d: number) => {
+    const t = new Date(Date.UTC(y, mo - 1 + d, 1));
+    return `${t.getUTCFullYear()}-${pad2(t.getUTCMonth() + 1)}`;
+  };
+  const first = `${ym}-01`;
+  const last = `${ym}-${pad2(lastDay)}`;
+  const prevHref = `/admin/attendance?m=${shiftYm(-1)}`;
+  const nextHref = ym < cur ? `/admin/attendance?m=${shiftYm(1)}` : null;
+  const monthTitle = new Date(Date.UTC(y, mo - 1, 1)).toLocaleDateString("en-PH", { month: "long", year: "numeric", timeZone: "UTC" });
+
+  const [emps, shifts, att, leaves, hol, fixes, reqs, audit, mAtt, mLeaves, mHol, mFix] = await Promise.all([
     sb.from("profiles").select("id, full_name, shift_id, hired_on").eq("role", "employee").order("employee_code"),
     sb.from("shifts").select("id, name, start_time, rest_days"),
     sb.from("attendance").select("employee_id, time_in, time_out").eq("work_date", today),
@@ -42,6 +62,15 @@ export default async function AttendancePage() {
       .order("created_at", { ascending: false }),
     sb.from("hr_requests").select("id, type, request_date, status, profiles!employee_id(full_name)").order("id", { ascending: false }),
     sb.from("audit_log").select("action, detail, actor_name, created_at").order("created_at", { ascending: false }).limit(8),
+    // ---- month data for the calendar ----
+    sb.from("attendance").select("employee_id, work_date, time_in, time_out").gte("work_date", first).lte("work_date", last).limit(5000),
+    sb.from("leave_requests").select("employee_id, from_date, to_date").eq("status", "Approved").lte("from_date", last).gte("to_date", first),
+    sb.from("holidays").select("name, on_date").gte("on_date", first).lte("on_date", last),
+    sb
+      .from("attendance_corrections")
+      .select("work_date, type, requested_time, status, hr_remarks, profiles!employee_id(full_name)")
+      .gte("work_date", first)
+      .lte("work_date", last),
   ]);
 
   const shiftBy = new Map((shifts.data ?? []).map((s) => [s.id, s]));
@@ -66,6 +95,67 @@ export default async function AttendancePage() {
     else tag = mins(tin) > mins(sh?.start_time ?? "09:00") ? <span className="tag wait">Late</span> : <span className="tag ok">On time</span>;
     return { e, sh, tin, tout, tag };
   });
+
+  // ---- build per-day summaries for the calendar ----
+  const mRecBy = new Map((mAtt.data ?? []).map((r) => [`${r.employee_id}|${r.work_date}`, r]));
+  const mHolBy = new Map((mHol.data ?? []).map((h) => [h.on_date as string, h.name as string]));
+  const mLeaveList = mLeaves.data ?? [];
+
+  const days: DayData[] = [];
+  for (let d = 1; d <= lastDay; d++) {
+    const k = `${ym}-${pad2(d)}`;
+    const dDow = new Date(Date.UTC(y, mo - 1, d)).getUTCDay();
+    const holName = mHolBy.get(k) ?? null;
+    const future = k > today;
+    const counts = { on: 0, late: 0, absent: 0, leave: 0, inc: 0, clocked: 0 };
+    const dayRows: DayData["rows"] = [];
+
+    if (!future) {
+      for (const e of emps.data ?? []) {
+        if (k < e.hired_on) continue;
+        const sh = shiftBy.get(e.shift_id);
+        const start = sh?.start_time ?? "09:00";
+        const r = mRecBy.get(`${e.id}|${k}`);
+        const tin = hm(r?.time_in ?? null);
+        const tout = hm(r?.time_out ?? null);
+        const rest = !!sh?.rest_days?.includes(dDow);
+        const leave = mLeaveList.some((l) => l.employee_id === e.id && k >= l.from_date && k <= l.to_date);
+        let label = "", cls = "";
+        if (rest && !tin) { label = "Rest day"; }
+        else if (holName && !tin) { label = "Holiday"; cls = "info"; }
+        else if (leave && !tin) { label = "On leave"; cls = "info"; counts.leave++; }
+        else if (rest) { label = "Rest-day work"; cls = "info"; }
+        else if (!tin) {
+          if (k === today && nowM < mins(start)) label = "Not in yet";
+          else { label = "Absent"; cls = "bad"; counts.absent++; }
+        } else if (!tout) {
+          if (k === today) { label = "Clocked in"; cls = "wait"; counts.clocked++; }
+          else { label = "Incomplete (no clock-out)"; cls = "wait"; counts.inc++; }
+        } else if (mins(tin) > mins(start)) {
+          label = `Late · ${mins(tin) - mins(start)} min`; cls = "wait"; counts.late++;
+        } else { label = "On time"; cls = "ok"; counts.on++; }
+        dayRows.push({ name: e.full_name, shift: sh?.name ?? "—", tin, tout, label, cls });
+      }
+    }
+
+    days.push({
+      k,
+      n: d,
+      future,
+      hol: holName,
+      counts,
+      rows: dayRows,
+      fixes: (mFix.data ?? [])
+        .filter((f) => f.work_date === k)
+        .map((f) => ({
+          name: nm(f.profiles as Emb),
+          type: f.type,
+          requested: hm(f.requested_time),
+          status: f.status,
+          remarks: f.hr_remarks ?? null,
+        })),
+    });
+  }
 
   const fixList = [...(fixes.data ?? [])].sort((a, b) => (a.status === "Pending" ? -1 : 0) - (b.status === "Pending" ? -1 : 0));
   const pendFix = fixList.filter((f) => f.status === "Pending").length;
@@ -97,6 +187,16 @@ export default async function AttendancePage() {
           </tbody>
         </table>
       </div>
+
+      <AdminAttendanceCalendar
+        days={days}
+        lead={lead}
+        prev={prevHref}
+        next={nextHref}
+        todayHref={`/admin/attendance?m=${cur}`}
+        today={today}
+        monthTitle={monthTitle}
+      />
 
       <div className="card mt">
         <div className="cardhd">
