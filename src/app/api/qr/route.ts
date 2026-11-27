@@ -1,41 +1,30 @@
 import { NextResponse } from "next/server";
+import QRCode from "qrcode";
 import { supabaseServer } from "@/lib/supabase/server";
-import { BUCKET, extOf } from "@/lib/doc-types";
+import { makeBadgeToken } from "@/lib/qr";
 
 export const dynamic = "force-dynamic";
 
-// Only images and PDFs are shown inline. The type comes from the file extension, never from what the browser claimed.
-const TYPES: Record<string, string> = { pdf: "application/pdf", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png" };
-
-/** Preview for the cards and the document tiles. Admins can see any file, employees only their own. */
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  if (!/^[0-9a-f-]{36}$/i.test(id)) return new NextResponse("Bad request", { status: 400 });
+/** Admin only. Returns { svg } for one employee's badge QR (GET /api/qr?id=<employee uuid>). Errors come back as { error }. */
+export async function GET(req: Request) {
+  const id = new URL(req.url).searchParams.get("id") ?? "";
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return NextResponse.json({ error: "Bad employee id" }, { status: 400 });
 
   const sb = await supabaseServer();
-  const {
-    data: { user },
-  } = await sb.auth.getUser();
-  if (!user) return new NextResponse("Unauthorized", { status: 401 });
-
-  const { data: row } = await sb.from("employee_documents").select("storage_path, employee_id, file_name").eq("id", id).single();
-  if (!row) return new NextResponse("Not found", { status: 404 });
-
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Please sign in again" }, { status: 401 });
   const { data: me } = await sb.from("profiles").select("role").eq("id", user.id).single();
-  if (me?.role !== "admin" && row.employee_id !== user.id) return new NextResponse("Forbidden", { status: 403 });
+  if (me?.role !== "admin") return NextResponse.json({ error: "Admins only" }, { status: 403 });
 
-  const type = TYPES[extOf(row.file_name)];
-  if (!type) return new NextResponse("No preview for this file type", { status: 415 });
+  const { data: emp, error } = await sb.from("profiles").select("id, role, qr_version").eq("id", id).single();
+  if (error || !emp) return NextResponse.json({ error: error?.message ?? "Employee not found" }, { status: 404 });
+  if (emp.role === "admin") return NextResponse.json({ error: "Admins don't use QR badges" }, { status: 400 });
 
-  const { data: blob, error } = await sb.storage.from(BUCKET).download(row.storage_path);
-  if (error || !blob) return new NextResponse("File not found", { status: 404 });
-
-  return new NextResponse(blob, {
-    headers: {
-      "Content-Type": type,
-      "Content-Disposition": "inline",
-      "Cache-Control": "private, max-age=120",
-      "X-Content-Type-Options": "nosniff",
-    },
-  });
+  try {
+    const svg = await QRCode.toString(makeBadgeToken(emp.id as string, emp.qr_version ?? 0), { type: "svg", margin: 1 });
+    return NextResponse.json({ svg });
+  } catch (e) {
+    // most likely QR_SECRET is missing or shorter than 32 characters in .env.local
+    return NextResponse.json({ error: e instanceof Error ? e.message : "Could not build the QR" }, { status: 500 });
+  }
 }

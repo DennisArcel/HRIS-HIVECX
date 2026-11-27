@@ -9,8 +9,9 @@ export async function regenerateQr(employeeId: string): Promise<{ ok: true } | {
     await requireAdmin();
     if (!/^[0-9a-f-]{36}$/i.test(employeeId)) return { ok: false, error: "Bad id" };
     const sb = await supabaseServer();
-    const { data, error } = await sb.from("profiles").select("qr_version").eq("id", employeeId).single();
+    const { data, error } = await sb.from("profiles").select("qr_version, role").eq("id", employeeId).single();
     if (error || !data) return { ok: false, error: error?.message ?? "Employee not found" };
+    if (data.role === "admin") return { ok: false, error: "Admins don't use QR badges" };
     const { error: e2 } = await sb
       .from("profiles")
       .update({ qr_version: (data.qr_version ?? 0) + 1 })

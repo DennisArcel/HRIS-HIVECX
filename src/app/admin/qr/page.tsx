@@ -8,7 +8,10 @@ export const dynamic = "force-dynamic";
 export default async function AdminQrPage() {
   await requireAdmin();
   const sb = await supabaseServer();
-  const { data, error } = await sb.from("profiles").select("id, full_name, role").order("full_name");
+  const { data: all, error } = await sb.from("profiles").select("id, full_name, role").order("full_name");
+
+  // Admins don't clock in with a badge, so they're left out.
+  const data = (all ?? []).filter((e) => e.role !== "admin");
 
   return (
     <div style={{ maxWidth: 820 }}>

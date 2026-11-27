@@ -10,9 +10,9 @@ type Cam = { id: string; label: string };
 
 const hm = () => new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Manila", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
 
-export function ScanClient({ employees }: { employees: Emp[] }) {
+export function ScanClient({ employees, initialLog = [] }: { employees: Emp[]; initialLog?: Log[] }) {
   const [running, setRunning] = useState(false);
-  const [log, setLog] = useState<Log[]>([]);
+  const [log, setLog] = useState<Log[]>(initialLog);   // today's scans come from the database, so they survive leaving the tab
   const [banner, setBanner] = useState<Log | null>(null);
   const [camErr, setCamErr] = useState("");
   const [cams, setCams] = useState<Cam[]>([]);
@@ -44,7 +44,7 @@ export function ScanClient({ employees }: { employees: Emp[] }) {
       finally { busy.current = false; }
     }
     setBanner(res);
-    setLog((l) => [res, ...l].slice(0, 20));
+    setLog((l) => [res, ...l].slice(0, 50));
   }
   const handleRef = useRef(handle); handleRef.current = handle;
 
@@ -179,7 +179,7 @@ export function ScanClient({ employees }: { employees: Emp[] }) {
       <div className="card mt">
         <div className="fig">RECENT SCANS</div>
         <div>
-          {log.length === 0 && <p className="mut">Nothing scanned yet.</p>}
+          {log.length === 0 && <p className="mut">Nothing scanned yet today.</p>}
           {log.map((l, i) => (
             <div className="ls" key={i}><span className={"tag " + (l.ok ? "ok" : "wait")}>{l.ok ? "OK" : "Check"}</span> {l.msg} <span className="mut">· {l.t}</span></div>
           ))}

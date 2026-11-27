@@ -5,6 +5,8 @@ import { readToken } from "@/lib/qr";
 import { manilaNow, mins } from "@/lib/dates";
 import { isRest } from "@/lib/leave";
 
+const SCAN_GAP_MINUTES = 120; // 2 hours between a clock-in and the next scan
+
 /** HR scans a code: first scan of the day = clock in, second = clock out. Server time decides the minute, never the client. */
 export async function POST(req: Request) {
   const sb = await supabaseServer();
@@ -55,6 +57,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, late: late > 0, msg: `${emp.full_name} clocked IN at ${time}${off ? ` · ${off} work` : late ? ` · late by ${late} min` : " · on time"}` });
   }
   if (mins(time) < mins(rec.time_in)) return NextResponse.json({ ok: false, msg: `Clock-out can't be before clock-in (${rec.time_in.slice(0, 5)})` });
+  // Minimum gap between the clock-in scan and the next scan (the clock-out). Stops accidental double scans.
+  const waitLeft = mins(rec.time_in) + SCAN_GAP_MINUTES - mins(time);
+  if (waitLeft > 0) {
+    const okAt = mins(rec.time_in) + SCAN_GAP_MINUTES;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return NextResponse.json({ ok: false, msg: `${emp.full_name} already clocked in at ${rec.time_in.slice(0, 5)}. They can scan again after ${pad(Math.floor(okAt / 60) % 24)}:${pad(okAt % 60)} (${Math.floor(waitLeft / 60)}h ${waitLeft % 60}m left)` });
+  }
   await sb.from("attendance").update({ time_out: time }).eq("id", rec.id);
   const w = mins(time) - mins(rec.time_in);
   await audit("QR clock out", `${emp.full_name} · ${date} · ${time}`);

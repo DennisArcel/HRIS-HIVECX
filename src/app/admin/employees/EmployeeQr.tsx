@@ -19,8 +19,9 @@ export function EmployeeQr({ id, name }: { id: string; name: string }) {
   async function load() {
     try {
       const r = await fetch(`/api/qr?id=${encodeURIComponent(id)}`, { cache: "no-store" });
-      if (!r.ok) { setMsg("Couldn't load QR"); return; }
-      setSvg((await r.json()).svg);
+      const j = (await r.json().catch(() => null)) as { svg?: string; error?: string } | null;
+      if (!r.ok || !j?.svg) { setMsg(j?.error ? `Couldn't load QR: ${j.error}` : `Couldn't load QR (error ${r.status})`); return; }
+      setSvg(j.svg);
     } catch {
       setMsg("Couldn't load QR");
     }
